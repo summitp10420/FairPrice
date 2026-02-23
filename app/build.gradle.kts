@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.fairprice.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.fairprice.app"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
@@ -74,7 +74,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    implementation("org.mozilla.geckoview:geckoview:128.0.20240725162350")
+    implementation("org.mozilla.geckoview:geckoview:147.0.20260212191108")
 
     val supabaseBom = platform("io.github.jan-tennert.supabase:bom:3.0.0")
     implementation(supabaseBom)
@@ -82,5 +82,5 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.ktor:ktor-client-okhttp:3.0.0")
 
-    implementation("com.wireguard.android:tunnel:1.0.20230706")
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
 }
