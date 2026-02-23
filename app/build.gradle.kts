@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -61,6 +62,8 @@ configurations.configureEach {
             "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24",
             "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24",
             "org.jetbrains.kotlin:kotlin-reflect:1.9.24",
+            "org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.3",
+            "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3",
         )
     }
 }
@@ -85,6 +88,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
     implementation("org.mozilla.geckoview:geckoview:147.0.20260212191108")
 
