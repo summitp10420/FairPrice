@@ -74,7 +74,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    implementation("org.mozilla.geckoview:geckoview:149.0.20260216211257")
+    implementation("org.mozilla.geckoview:geckoview:147.0.20260212191108")
 
     val supabaseBom = platform("io.github.jan-tennert.supabase:bom:3.0.0")
     implementation(supabaseBom)
