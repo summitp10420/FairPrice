@@ -74,12 +74,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    implementation("org.mozilla.geckoview:geckoview:128.0.20240701000000")
+    implementation("org.mozilla.geckoview:geckoview:149.0.20260216211257")
 
     val supabaseBom = platform("io.github.jan-tennert.supabase:bom:3.0.0")
     implementation(supabaseBom)
-    implementation("io.github.jan-tennert.supabase:gotrue-kt")
+    implementation("io.github.jan-tennert.supabase:auth-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.ktor:ktor-client-okhttp:3.2.3")
 
     implementation("com.wireguard.android:tunnel:1.0.20230706")
 }
