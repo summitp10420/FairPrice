@@ -80,7 +80,7 @@ dependencies {
     implementation(supabaseBom)
     implementation("io.github.jan-tennert.supabase:auth-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
-    implementation("io.ktor:ktor-client-okhttp:3.2.3")
+    implementation("io.ktor:ktor-client-okhttp:3.0.0")
 
     implementation("com.wireguard.android:tunnel:1.0.20230706")
 }
