@@ -54,6 +54,17 @@ android {
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy {
+        force(
+            "org.jetbrains.kotlin:kotlin-stdlib:1.9.24",
+            "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24",
+            "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24",
+            "org.jetbrains.kotlin:kotlin-reflect:1.9.24",
+        )
+    }
+}
+
 dependencies {
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.24"))
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
