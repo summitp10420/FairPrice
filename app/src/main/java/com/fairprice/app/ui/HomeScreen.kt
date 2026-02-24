@@ -52,10 +52,16 @@ fun HomeScreen(
             Text("Check Price")
         }
         uiState.lastLogStatusMessage?.let { statusMessage ->
+            val statusColor = if (statusMessage.contains("failed", ignoreCase = true)) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = statusMessage,
                 style = MaterialTheme.typography.bodyMedium,
+                color = statusColor,
             )
         }
     }
