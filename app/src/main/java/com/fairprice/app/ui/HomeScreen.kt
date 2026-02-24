@@ -57,7 +57,7 @@ fun HomeScreen(
             is HomeProcessState.Processing -> {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Logging price check...",
+                    text = processState.message,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.secondary,
                 )
