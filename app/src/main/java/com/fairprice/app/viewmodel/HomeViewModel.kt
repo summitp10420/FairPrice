@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.buildJsonObject
+import org.mozilla.geckoview.GeckoSession
 
 sealed interface HomeProcessState {
     data object Idle : HomeProcessState
@@ -27,6 +28,7 @@ data class HomeUiState(
     val urlInput: String = "",
     val lastSubmittedUrl: String? = null,
     val processState: HomeProcessState = HomeProcessState.Idle,
+    val activeSession: GeckoSession? = null,
 )
 
 class HomeViewModel(
@@ -36,6 +38,16 @@ class HomeViewModel(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            extractionEngine.currentSession.collect { session ->
+                _uiState.update { current ->
+                    current.copy(activeSession = session)
+                }
+            }
+        }
+    }
 
     fun onUrlInputChanged(value: String) {
         _uiState.update { current ->

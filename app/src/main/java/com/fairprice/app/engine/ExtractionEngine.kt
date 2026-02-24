@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,37 +35,37 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private var pendingExtraction: PendingExtraction? = null
 
     init {
-        runtime.webExtensionController
-            .ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID)
-            .accept(
-                { extension ->
-                    val resolvedExtension = extension ?: run {
-                        Log.e("GeckoExtractionEngine", "Built-in extractor extension resolved as null.")
-                        return@accept
-                    }
-                    resolvedExtension.setMessageDelegate(
-                        messageDelegate,
-                        EXTENSION_ID,
-                    )
-                    Log.i("GeckoExtractionEngine", "Built-in extractor extension registered.")
-                },
-                { throwable ->
-                    Log.e("GeckoExtractionEngine", "Failed to register built-in extractor extension.", throwable)
-                },
-            )
+        runtime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
+            { extension ->
+                if (extension == null) {
+                    Log.e("GeckoExtractionEngine", "Built-in extractor extension resolved as null during warmup.")
+                } else {
+                    Log.i("GeckoExtractionEngine", "Built-in extractor extension warmup succeeded.")
+                }
+            },
+            { throwable ->
+                Log.e("GeckoExtractionEngine", "Failed warmup for built-in extractor extension.", throwable)
+            },
+        )
     }
 
     override suspend fun loadAndExtract(url: String): Result<Int> = runCatching {
+        Log.i("GeckoExtractionEngine", "Starting loadAndExtract for URL: $url")
+        val extension = awaitBuiltInExtension()
         val session = createFreshSession()
+        attachDelegate(extension)
+
         withTimeout(EXTRACTION_TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
                 setPendingExtraction(session, continuation)
                 continuation.invokeOnCancellation {
                     clearPendingExtraction(continuation)
+                    Log.w("GeckoExtractionEngine", "Extraction continuation cancelled for URL: $url")
                 }
 
                 try {
                     session.load(GeckoSession.Loader().uri(url))
+                    Log.i("GeckoExtractionEngine", "Session load started for URL: $url")
                 } catch (throwable: Throwable) {
                     clearPendingExtraction(continuation)
                     if (continuation.isActive) {
@@ -75,6 +76,49 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                 }
             }
         }
+    }.onFailure { throwable ->
+        when (throwable) {
+            is TimeoutCancellationException -> {
+                Log.e("GeckoExtractionEngine", "Extraction timed out after $EXTRACTION_TIMEOUT_MS ms.")
+            }
+            else -> {
+                Log.e("GeckoExtractionEngine", "Extraction failed.", throwable)
+            }
+        }
+    }
+
+    private suspend fun awaitBuiltInExtension(): WebExtension {
+        return suspendCancellableCoroutine { continuation ->
+            runtime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
+                { extension ->
+                    val resolvedExtension = extension ?: run {
+                        if (continuation.isActive) {
+                            continuation.cancel(
+                                CancellationException("Built-in extractor extension resolved as null."),
+                            )
+                        }
+                        return@accept
+                    }
+                    Log.i("GeckoExtractionEngine", "Built-in extractor extension ready.")
+                    continuation.resume(resolvedExtension)
+                },
+                { throwable ->
+                    if (continuation.isActive) {
+                        continuation.cancel(
+                            CancellationException("Failed ensuring built-in extractor extension.", throwable),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    private fun attachDelegate(extension: WebExtension) {
+        extension.setMessageDelegate(
+            messageDelegate,
+            EXTENSION_ID,
+        )
+        Log.i("GeckoExtractionEngine", "Message delegate attached for extractor native app channel.")
     }
 
     private fun createFreshSession(): GeckoSession {
@@ -116,8 +160,16 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             message: Any,
             sender: WebExtension.MessageSender,
         ): GeckoResult<Any>? {
-            val payload = parsePriceExtractMessage(message) ?: return null
-            if (payload.type != PRICE_EXTRACT_TYPE) return null
+            val payload = parsePriceExtractMessage(message)
+            if (payload == null) {
+                Log.w("GeckoExtractionEngine", "Ignoring malformed extension message: $message")
+                return null
+            }
+            if (payload.type != PRICE_EXTRACT_TYPE) {
+                Log.i("GeckoExtractionEngine", "Ignoring non-extraction message type: ${payload.type}")
+                return null
+            }
+            Log.i("GeckoExtractionEngine", "Received PRICE_EXTRACT message with ${payload.priceCents} cents.")
 
             mainScope.launch {
                 resumePendingExtraction(sender.session, payload.priceCents)
@@ -129,12 +181,16 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private fun resumePendingExtraction(senderSession: GeckoSession?, priceCents: Int) {
         val pending = synchronized(pendingLock) {
             val current = pendingExtraction ?: return
-            if (senderSession != null && senderSession !== current.session) return
+            if (senderSession != null && senderSession !== current.session) {
+                Log.w("GeckoExtractionEngine", "Ignoring message from non-active session.")
+                return
+            }
             pendingExtraction = null
             current
         }
         if (pending.continuation.isActive) {
             pending.continuation.resume(priceCents)
+            Log.i("GeckoExtractionEngine", "Extraction continuation resumed successfully.")
         }
     }
 
