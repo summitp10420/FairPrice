@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "FairPrice Extractor",
+  "version": "1.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extractor@fairprice.com"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "extractor.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}
