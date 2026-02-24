@@ -26,6 +26,7 @@ class FairPriceRepositoryImpl(
     }
 
     private suspend fun ensureAuthenticatedSession() {
+        supabaseClient.auth.awaitInitialization()
         val sessionStatus = supabaseClient.auth.sessionStatus.value
         if (sessionStatus is SessionStatus.Authenticated) return
         supabaseClient.auth.signInAnonymously()

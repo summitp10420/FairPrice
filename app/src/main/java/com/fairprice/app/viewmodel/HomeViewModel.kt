@@ -66,6 +66,7 @@ class HomeViewModel(
         viewModelScope.launch {
             var terminalError: String? = null
             var successMessage: String? = null
+            var isVpnConnected = false
 
             try {
                 _uiState.update { current ->
@@ -78,6 +79,7 @@ class HomeViewModel(
                     Log.e("HomeViewModel", "VPN connect failed", throwable)
                     return@launch
                 }
+                isVpnConnected = true
 
                 _uiState.update { current ->
                     current.copy(
@@ -112,12 +114,14 @@ class HomeViewModel(
                 Log.i("HomeViewModel", "price_checks insert succeeded")
                 successMessage = "Price check logged. Extracted price: ${formatUsd(extractedPriceCents)}."
             } finally {
-                val disconnectResult = vpnEngine.disconnect()
-                if (disconnectResult.isFailure) {
-                    val throwable = disconnectResult.exceptionOrNull()
-                    val disconnectMessage = "VPN disconnect failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "VPN disconnect failed", throwable)
-                    terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
+                if (isVpnConnected) {
+                    val disconnectResult = vpnEngine.disconnect()
+                    if (disconnectResult.isFailure) {
+                        val throwable = disconnectResult.exceptionOrNull()
+                        val disconnectMessage = "VPN disconnect failed: ${throwable.toUserMessage()}"
+                        Log.e("HomeViewModel", "VPN disconnect failed", throwable)
+                        terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
+                    }
                 }
 
                 _uiState.update { current ->
