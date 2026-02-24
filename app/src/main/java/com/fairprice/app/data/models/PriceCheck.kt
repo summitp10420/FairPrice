@@ -6,9 +6,9 @@ import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class PriceCheck(
-    val id: String,
+    val id: String? = null,
     @SerialName("user_id")
-    val userId: String,
+    val userId: String? = null,
     @SerialName("product_url")
     val productUrl: String,
     val domain: String,
@@ -17,11 +17,11 @@ data class PriceCheck(
     @SerialName("found_price_cents")
     val foundPriceCents: Int,
     @SerialName("strategy_id")
-    val strategyId: String,
+    val strategyId: String? = null,
     @SerialName("extraction_successful")
     val extractionSuccessful: Boolean,
     @SerialName("raw_extraction_data")
     val rawExtractionData: JsonObject,
     @SerialName("created_at")
-    val createdAt: String,
+    val createdAt: String? = null,
 )

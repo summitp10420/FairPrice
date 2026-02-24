@@ -51,5 +51,12 @@ fun HomeScreen(
         ) {
             Text("Check Price")
         }
+        uiState.lastLogStatusMessage?.let { statusMessage ->
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }

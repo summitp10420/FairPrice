@@ -1,12 +1,11 @@
 package com.fairprice.app.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import java.net.URI
-import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 data class HomeUiState(
     val urlInput: String = "",
     val lastSubmittedUrl: String? = null,
+    val lastLogStatusMessage: String? = null,
 )
 
 class HomeViewModel(
@@ -42,12 +42,31 @@ class HomeViewModel(
 
     fun onCheckPriceClicked() {
         val submittedUrl = _uiState.value.urlInput.trim()
-        _uiState.update { current -> current.copy(lastSubmittedUrl = submittedUrl) }
+        _uiState.update { current ->
+            current.copy(
+                lastSubmittedUrl = submittedUrl,
+                lastLogStatusMessage = null,
+            )
+        }
 
         if (submittedUrl.isBlank()) return
 
         viewModelScope.launch {
-            repository.logPriceCheck(buildPriceCheck(submittedUrl))
+            val result = repository.logPriceCheck(buildPriceCheck(submittedUrl))
+            result
+                .onSuccess {
+                    _uiState.update { current ->
+                        current.copy(lastLogStatusMessage = "Price check log sent to Supabase.")
+                    }
+                    Log.i("HomeViewModel", "price_checks insert succeeded")
+                }
+                .onFailure { throwable ->
+                    val message = throwable.message ?: throwable::class.java.simpleName
+                    _uiState.update { current ->
+                        current.copy(lastLogStatusMessage = "Supabase log failed: $message")
+                    }
+                    Log.e("HomeViewModel", "price_checks insert failed", throwable)
+                }
         }
     }
 
@@ -60,16 +79,12 @@ class HomeViewModel(
     private fun buildPriceCheck(url: String): PriceCheck {
         val domain = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
         return PriceCheck(
-            id = UUID.randomUUID().toString(),
-            userId = "00000000-0000-0000-0000-000000000000",
             productUrl = url,
             domain = domain,
             baselinePriceCents = 0,
             foundPriceCents = 0,
-            strategyId = "",
             extractionSuccessful = false,
             rawExtractionData = buildJsonObject { },
-            createdAt = Instant.now().toString(),
         )
     }
 }
