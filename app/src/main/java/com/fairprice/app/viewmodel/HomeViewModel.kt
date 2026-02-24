@@ -13,10 +13,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.buildJsonObject
 
+sealed interface HomeProcessState {
+    data object Idle : HomeProcessState
+    data object Processing : HomeProcessState
+    data class Success(val message: String) : HomeProcessState
+    data class Error(val message: String) : HomeProcessState
+}
+
 data class HomeUiState(
     val urlInput: String = "",
     val lastSubmittedUrl: String? = null,
-    val lastLogStatusMessage: String? = null,
+    val processState: HomeProcessState = HomeProcessState.Idle,
 )
 
 class HomeViewModel(
@@ -45,25 +52,36 @@ class HomeViewModel(
         _uiState.update { current ->
             current.copy(
                 lastSubmittedUrl = submittedUrl,
-                lastLogStatusMessage = null,
+                processState = HomeProcessState.Idle,
             )
         }
 
         if (submittedUrl.isBlank()) return
 
         viewModelScope.launch {
+            _uiState.update { current ->
+                current.copy(processState = HomeProcessState.Processing)
+            }
             val result = repository.logPriceCheck(buildPriceCheck(submittedUrl))
             result
                 .onSuccess {
                     _uiState.update { current ->
-                        current.copy(lastLogStatusMessage = "Price check log sent to Supabase.")
+                        current.copy(
+                            processState = HomeProcessState.Success(
+                                message = "Price check log sent to Supabase.",
+                            ),
+                        )
                     }
                     Log.i("HomeViewModel", "price_checks insert succeeded")
                 }
                 .onFailure { throwable ->
                     val message = throwable.message ?: throwable::class.java.simpleName
                     _uiState.update { current ->
-                        current.copy(lastLogStatusMessage = "Supabase log failed: $message")
+                        current.copy(
+                            processState = HomeProcessState.Error(
+                                message = "Supabase log failed: $message",
+                            ),
+                        )
                     }
                     Log.e("HomeViewModel", "price_checks insert failed", throwable)
                 }

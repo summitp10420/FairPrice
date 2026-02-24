@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.fairprice.app.viewmodel.HomeProcessState
 import com.fairprice.app.viewmodel.HomeUiState
 
 @Composable
@@ -51,18 +52,32 @@ fun HomeScreen(
         ) {
             Text("Check Price")
         }
-        uiState.lastLogStatusMessage?.let { statusMessage ->
-            val statusColor = if (statusMessage.contains("failed", ignoreCase = true)) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.primary
+        when (val processState = uiState.processState) {
+            is HomeProcessState.Idle -> Unit
+            is HomeProcessState.Processing -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Logging price check...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = statusMessage,
-                style = MaterialTheme.typography.bodyMedium,
-                color = statusColor,
-            )
+            is HomeProcessState.Success -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = processState.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            is HomeProcessState.Error -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = processState.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
