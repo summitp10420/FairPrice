@@ -1,8 +1,29 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        localFile.inputStream().use { load(it) }
+    }
+}
+
+val supabaseUrl = (
+    localProperties.getProperty("SUPABASE_URL")
+        ?: localProperties.getProperty("supabase_url")
+        ?: ""
+).trim()
+
+val supabaseAnonKey = (
+    localProperties.getProperty("SUPABASE_ANON_KEY")
+        ?: localProperties.getProperty("supabase_anon_key")
+        ?: ""
+).trim()
 
 android {
     namespace = "com.fairprice.app"
@@ -16,6 +37,8 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -42,6 +65,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
