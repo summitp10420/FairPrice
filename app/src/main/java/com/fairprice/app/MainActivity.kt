@@ -8,15 +8,34 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.fairprice.app.data.FairPriceRepository
+import com.fairprice.app.data.FairPriceRepositoryImpl
+import com.fairprice.app.data.SupabaseClientProvider
 import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
 
 class MainActivity : ComponentActivity() {
-    private val homeViewModel: HomeViewModel by viewModels()
+    private val repository: FairPriceRepository by lazy {
+        FairPriceRepositoryImpl(SupabaseClientProvider.client)
+    }
+
+    private val homeViewModel: HomeViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(HomeViewModel::class.java)) {
+                    return HomeViewModel(repository) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
