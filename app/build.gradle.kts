@@ -1,16 +1,17 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
     namespace = "com.fairprice.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.fairprice.app"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
@@ -54,7 +55,21 @@ android {
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy {
+        force(
+            "org.jetbrains.kotlin:kotlin-stdlib:1.9.24",
+            "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24",
+            "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24",
+            "org.jetbrains.kotlin:kotlin-reflect:1.9.24",
+            "org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.3",
+            "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3",
+        )
+    }
+}
+
 dependencies {
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.24"))
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -73,8 +88,9 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
-    implementation("org.mozilla.geckoview:geckoview:128.0.20240725162350")
+    implementation("org.mozilla.geckoview:geckoview:147.0.20260212191108")
 
     val supabaseBom = platform("io.github.jan-tennert.supabase:bom:3.0.0")
     implementation(supabaseBom)
@@ -82,5 +98,5 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.ktor:ktor-client-okhttp:3.0.0")
 
-    implementation("com.wireguard.android:tunnel:1.0.20230706")
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
 }
