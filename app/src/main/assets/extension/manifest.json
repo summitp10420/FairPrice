@@ -9,6 +9,8 @@
   },
   "permissions": [
     "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
     "<all_urls>"
   ],
   "content_scripts": [

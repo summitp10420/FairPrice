@@ -53,7 +53,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         Log.i("GeckoExtractionEngine", "Starting loadAndExtract for URL: $url")
         val extension = awaitBuiltInExtension()
         val session = createFreshSession()
-        attachDelegate(extension)
+        attachDelegate(extension, session)
 
         withTimeout(EXTRACTION_TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
@@ -113,8 +113,13 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private fun attachDelegate(extension: WebExtension) {
+    private fun attachDelegate(extension: WebExtension, session: GeckoSession) {
         extension.setMessageDelegate(
+            messageDelegate,
+            NATIVE_APP_CHANNEL,
+        )
+        session.webExtensionController.setMessageDelegate(
+            extension,
             messageDelegate,
             NATIVE_APP_CHANNEL,
         )
