@@ -6,7 +6,7 @@ setTimeout(() => {
 
   console.log("[FairPrice extractor] sending native message", payload);
   browser.runtime
-    .sendNativeMessage("extractor@fairprice.com", payload)
+    .sendNativeMessage("com.fairprice.extractor", payload)
     .then((response) => {
       console.log("[FairPrice extractor] native message success", response);
     })

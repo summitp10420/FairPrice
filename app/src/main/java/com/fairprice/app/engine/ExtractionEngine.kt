@@ -116,7 +116,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private fun attachDelegate(extension: WebExtension) {
         extension.setMessageDelegate(
             messageDelegate,
-            EXTENSION_ID,
+            NATIVE_APP_CHANNEL,
         )
         Log.i("GeckoExtractionEngine", "Message delegate attached for extractor native app channel.")
     }
@@ -160,6 +160,10 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             message: Any,
             sender: WebExtension.MessageSender,
         ): GeckoResult<Any>? {
+            if (nativeApp != NATIVE_APP_CHANNEL) {
+                Log.i("GeckoExtractionEngine", "Ignoring message for unexpected native app channel: $nativeApp")
+                return null
+            }
             val payload = parsePriceExtractMessage(message)
             if (payload == null) {
                 Log.w("GeckoExtractionEngine", "Ignoring malformed extension message: $message")
@@ -230,6 +234,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
 
     private companion object {
         private const val EXTENSION_ID = "extractor@fairprice.com"
+        private const val NATIVE_APP_CHANNEL = "com.fairprice.extractor"
         private const val EXTENSION_RESOURCE_PATH = "resource://android/assets/extension/"
         private const val PRICE_EXTRACT_TYPE = "PRICE_EXTRACT"
         private const val EXTRACTION_TIMEOUT_MS = 15_000L
