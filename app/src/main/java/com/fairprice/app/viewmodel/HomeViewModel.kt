@@ -1,5 +1,6 @@
 package com.fairprice.app.viewmodel
 
+import android.content.Intent
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,13 +9,18 @@ import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
+import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
+import com.fairprice.app.engine.VpnPermissionRequiredException
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -52,7 +58,10 @@ class HomeViewModel(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+    private val _vpnPermissionRequests = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
+    val vpnPermissionRequests: SharedFlow<Intent> = _vpnPermissionRequests.asSharedFlow()
     private var shoppingVpnActive: Boolean = false
+    private var pendingVpnContinuation: PendingVpnContinuation? = null
 
     init {
         viewModelScope.launch {
@@ -97,8 +106,10 @@ class HomeViewModel(
             var vpnConnectedThisRun = false
             var keepVpnForShopping = false
             var finalShowBrowser = false
+            var awaitingVpnPermission = false
 
             try {
+                pendingVpnContinuation = null
                 if (shoppingVpnActive) {
                     val disconnectResult = vpnEngine.disconnect()
                     if (disconnectResult.isFailure) {
@@ -162,6 +173,21 @@ class HomeViewModel(
                 val connectResult = vpnEngine.connect(strategy.wireguardConfig)
                 if (connectResult.isFailure) {
                     val throwable = connectResult.exceptionOrNull()
+                    if (throwable is VpnPermissionRequiredException) {
+                        pendingVpnContinuation = PendingVpnContinuation(
+                            submittedUrl = submittedUrl,
+                            baselineResult = baselineResult,
+                            strategy = strategy,
+                        )
+                        _uiState.update { current ->
+                            current.copy(
+                                processState = HomeProcessState.Processing("Waiting for VPN permission..."),
+                            )
+                        }
+                        _vpnPermissionRequests.tryEmit(throwable.intent)
+                        awaitingVpnPermission = true
+                        return@launch
+                    }
                     terminalError = "VPN connect failed: ${throwable.toUserMessage()}"
                     Log.e("HomeViewModel", "VPN connect failed", throwable)
                     return@launch
@@ -221,9 +247,105 @@ class HomeViewModel(
                     shoppingVpnActive = false
                 }
 
+                if (!awaitingVpnPermission) {
+                    _uiState.update { current ->
+                        current.copy(
+                            showBrowser = finalShowBrowser,
+                            processState = terminalError?.let { HomeProcessState.Error(it) }
+                                ?: successSummary?.let { HomeProcessState.Success(it) }
+                                ?: HomeProcessState.Idle,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun onVpnPermissionResult(granted: Boolean) {
+        val pending = pendingVpnContinuation ?: return
+        pendingVpnContinuation = null
+
+        if (!granted) {
+            _uiState.update { current ->
+                current.copy(
+                    showBrowser = true,
+                    processState = HomeProcessState.Error(
+                        "VPN permission denied. Continuing without VPN optimization.",
+                    ),
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            var terminalError: String? = null
+            var successSummary: SummaryData? = null
+            var vpnConnectedThisRun = false
+            var keepVpnForShopping = false
+
+            try {
+                _uiState.update { current ->
+                    current.copy(processState = HomeProcessState.Processing("Connecting VPN..."))
+                }
+                val connectResult = vpnEngine.connect(pending.strategy.wireguardConfig)
+                if (connectResult.isFailure) {
+                    val throwable = connectResult.exceptionOrNull()
+                    terminalError = "VPN connect failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "VPN connect failed after permission grant", throwable)
+                    return@launch
+                }
+                vpnConnectedThisRun = true
+
+                _uiState.update { current ->
+                    current.copy(processState = HomeProcessState.Processing("Extracting spoofed price..."))
+                }
+                val spoofedResult = extractionEngine.loadAndExtract(pending.submittedUrl).getOrElse { throwable ->
+                    terminalError = "Spoofed extraction failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "Spoofed extraction failed after permission grant", throwable)
+                    return@launch
+                }
+
+                val priceCheck = buildPriceCheck(
+                    url = pending.submittedUrl,
+                    strategyId = pending.strategy.strategyId,
+                    baselinePriceCents = pending.baselineResult.priceCents,
+                    foundPriceCents = spoofedResult.priceCents,
+                    extractionSuccessful = true,
+                    tactics = pending.baselineResult.tactics,
+                )
+
+                _uiState.update { current ->
+                    current.copy(processState = HomeProcessState.Processing("Logging to database..."))
+                }
+                val logResult = repository.logPriceCheck(priceCheck)
+                if (logResult.isFailure) {
+                    val throwable = logResult.exceptionOrNull()
+                    terminalError = "Supabase log failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "price_checks insert failed after permission grant", throwable)
+                    return@launch
+                }
+
+                successSummary = buildSuccessSummary(
+                    baselineResult = pending.baselineResult,
+                    spoofedResult = spoofedResult,
+                )
+                keepVpnForShopping = true
+                shoppingVpnActive = true
+            } finally {
+                if (vpnConnectedThisRun && !keepVpnForShopping) {
+                    val disconnectResult = vpnEngine.disconnect()
+                    if (disconnectResult.isFailure) {
+                        val throwable = disconnectResult.exceptionOrNull()
+                        val disconnectMessage = "VPN disconnect failed: ${throwable.toUserMessage()}"
+                        Log.e("HomeViewModel", "VPN disconnect failed after permission grant", throwable)
+                        terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
+                    }
+                    shoppingVpnActive = false
+                }
+
                 _uiState.update { current ->
                     current.copy(
-                        showBrowser = finalShowBrowser,
+                        showBrowser = false,
                         processState = terminalError?.let { HomeProcessState.Error(it) }
                             ?: successSummary?.let { HomeProcessState.Success(it) }
                             ?: HomeProcessState.Idle,
@@ -324,4 +446,10 @@ class HomeViewModel(
             strategyName = "Default Strategy (stub)",
         )
     }
+
+    private data class PendingVpnContinuation(
+        val submittedUrl: String,
+        val baselineResult: ExtractionResult,
+        val strategy: StrategyResult,
+    )
 }

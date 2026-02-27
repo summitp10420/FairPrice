@@ -1,5 +1,6 @@
 package com.fairprice.app.viewmodel
 
+import android.content.Intent
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.engine.ExtractionEngine
@@ -7,10 +8,13 @@ import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
+import com.fairprice.app.engine.VpnPermissionRequiredException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -306,6 +310,133 @@ class HomeViewModelTest {
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
     }
 
+    @Test
+    fun permissionRequired_emitsPermissionRequestAndWaitsForResult() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine().apply {
+            connectResults = mutableListOf(
+                Result.failure(VpnPermissionRequiredException(Intent("vpn.permission"))),
+            )
+        }
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = listOf("cookie_tracking"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+        val emittedIntentDeferred = backgroundScope.async {
+            viewModel.vpnPermissionRequests.first()
+        }
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+        val requestIntent = emittedIntentDeferred.await()
+
+        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(1, vpnEngine.connectCalls)
+        assertEquals(0, repository.logCalls)
+        assertEquals("vpn.permission", requestIntent.action)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Processing)
+    }
+
+    @Test
+    fun permissionGranted_resumesFromVpnStepWithoutRerunningBaseline() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine().apply {
+            connectResults = mutableListOf(
+                Result.failure(VpnPermissionRequiredException(Intent("vpn.permission"))),
+                Result.success(Unit),
+            )
+        }
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2100, tactics = listOf("hidden_canvas"))),
+                Result.success(ExtractionResult(priceCents = 1700, tactics = listOf("hidden_canvas"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(1, vpnEngine.connectCalls)
+
+        viewModel.onVpnPermissionResult(granted = true)
+        advanceUntilIdle()
+
+        assertEquals(2, extractionEngine.loadCalls)
+        assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(2, vpnEngine.connectCalls)
+        assertEquals(1, repository.logCalls)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
+    fun permissionDenied_fallsBackToClearNetWithMessage() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine().apply {
+            connectResults = mutableListOf(
+                Result.failure(VpnPermissionRequiredException(Intent("vpn.permission"))),
+            )
+        }
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2100, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        viewModel.onVpnPermissionResult(granted = false)
+        advanceUntilIdle()
+
+        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(1, vpnEngine.connectCalls)
+        assertEquals(0, repository.logCalls)
+        assertTrue(viewModel.uiState.value.showBrowser)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Error)
+        assertTrue((processState as HomeProcessState.Error).message.contains("permission denied"))
+    }
+
     private class FakeStrategyEngine(
         var result: Result<StrategyResult>,
     ) : PricingStrategyEngine {
@@ -326,13 +457,17 @@ class HomeViewModelTest {
         var connectCalls: Int = 0
         var disconnectCalls: Int = 0
         var lastConnectConfig: String? = null
-        var connectResult: Result<Unit> = Result.success(Unit)
+        var connectResults: MutableList<Result<Unit>> = mutableListOf(Result.success(Unit))
         var disconnectResult: Result<Unit> = Result.success(Unit)
 
         override suspend fun connect(configStr: String): Result<Unit> {
             connectCalls += 1
             lastConnectConfig = configStr
-            return connectResult
+            return if (connectResults.isEmpty()) {
+                Result.success(Unit)
+            } else {
+                connectResults.removeAt(0)
+            }
         }
 
         override suspend fun disconnect(): Result<Unit> {

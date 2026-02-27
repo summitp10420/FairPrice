@@ -14,7 +14,7 @@ class DefaultPricingStrategyEngine : PricingStrategyEngine {
         return Result.success(
             StrategyResult(
                 strategyId = null,
-                wireguardConfig = "phase3-placeholder-config",
+                wireguardConfig = "Captivemarket_co-US-CO-254.conf",
             ),
         )
     }
