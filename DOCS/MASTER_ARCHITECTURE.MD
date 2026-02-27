@@ -1,5 +1,5 @@
-Last Updated: 2026-02-26
-Current Phase: Phase 5 in progress (two-pass extraction + shopping mode lifecycle).
+Last Updated: 2026-02-27
+Current Phase: Phase 6 complete (summary-first UX + graceful degradation); ready for Phase 7 engine hardening.
 
 1. Project Overview & Objective
 FairPrice is an Android application designed to defeat dynamic and personalized pricing strategies employed by online retailers (referencing tactics outlined in the Jan 2025 FTC report).
@@ -46,9 +46,11 @@ Execution + Spoofed Extraction: GeckoSession loads the URL through the active VP
 
 Extraction Payload Contract: A JavaScript WebExtension running inside GeckoView extracts DOM data and passes a JSON payload via GeckoSession.MessageDelegate with at least `{ type, priceCents, detectedTactics[] }`. Triggering must be event/DOM driven (not fixed-time delay), resilient to latency, and send once per page load.
 
-Comparison & Presentation: The app compares baseline and spoofed prices, displays outcome, and surfaces the live GeckoView tab used for the winning pass so the user can complete checkout.
+Comparison & Presentation: The app compares baseline and spoofed prices and first presents a summary card (baseline, spoofed, detected tactics, strategy label). The user explicitly enters Shopping Mode via a checkout action. Browser visibility is controlled by `showBrowser`.
 
-Shopping Mode Lifecycle: On successful spoofed extraction + logging, the app enters Shopping Mode, keeps the existing VPN/session active, and does not force a reconnect/reload. On explicit close action (or failure before Shopping Mode activation), the app disconnects VPN and resets session UI state.
+Shopping Mode Lifecycle: In Shopping Mode, the app keeps the existing VPN/session active and does not force a reconnect/reload. A non-destructive “Back to App” action hides browser content without disconnecting VPN. An explicit “Done/Close” action disconnects VPN, resets UI state, and clears URL input for the next run.
+
+Graceful Degradation: If baseline extraction fails, the app logs a fallback `price_check` (`extraction_successful = false`, zeroed prices, empty tactics payload), surfaces clear-net browsing, and shows a non-blocking error message so the user is not stranded.
 
 Telemetry: The app asynchronously logs session data (including baseline price, spoofed price, applied strategy ID when available, and extraction metadata/tactics) to Supabase through the repository layer. Railway remains a future/optional middleware path for heavier telemetry processing.
 
@@ -58,6 +60,7 @@ Telemetry: The app asynchronously logs session data (including baseline price, s
 - Orchestration Boundary: `HomeViewModel` coordinates baseline extraction -> strategy -> VPN -> spoofed extraction -> persistence -> shopping mode, but does not own strategy or extraction internals.
 - Composition Root: `MainActivity` wires concrete engine implementations into `HomeViewModel` via dependency injection (ViewModel factory).
 - Persistence Contract: Successful price checks must persist baseline and spoofed prices. `strategyId` should be persisted when available and remains nullable during stub strategy phases.
+- UX Contract: Successful checks must show summary-first and only reveal Gecko shopping content after explicit user action.
 
 4. Database Schema Structure (Supabase)
 The database utilizes Supabase Auth for user management. Application data is structured as follows (Cursor should write Kotlin data classes matching these tables):
@@ -86,6 +89,8 @@ Two-Pass Integrity: Price checks must run baseline extraction before VPN strateg
 Shopping Session Continuity: After a successful spoofed pass, preserve the existing VPN/session for checkout. Do not reconnect/reload post-success unless explicitly required by user action.
 
 VPN Lifecycle: The WireGuard tunnel must be managed in an isolated Android Service to prevent memory leaks or app crashes when the UI is backgrounded.
+
+Local VPN Config Hygiene: WireGuard `.conf` files may contain private keys and must not be committed. Keep runtime/local configs in `app/src/main/assets/vpn/` ignored by git patterns (for example, `app/src/main/assets/vpn/*.conf`).
 
 State Management: ViewModels must expose state via StateFlow. UI components must observe these flows. Do not pass business logic into Compose UI functions.
 
