@@ -16,8 +16,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.jsonArray
@@ -311,6 +313,116 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun spoofedExtraction_retriesOnceOnLikelyGeckoLifecycleFailure() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.failure(IllegalStateException("WindowEventDispatcher win is null")),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(1, repository.logCalls)
+        assertEquals(0, vpnEngine.disconnectCalls)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
+    fun spoofedExtraction_retryIsBoundedToSingleRetry() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2200, tactics = emptyList())),
+                Result.failure(IllegalStateException("WindowEventDispatcher win is null")),
+                Result.failure(IllegalStateException("WindowEventDispatcher win is null")),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(0, repository.logCalls)
+        assertEquals(1, vpnEngine.disconnectCalls)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
+    }
+
+    @Test
+    fun normalFlow_waitsForStabilizationGateBeforeSpoofExtraction() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2500, tactics = listOf("cookie_tracking"))),
+                Result.success(ExtractionResult(priceCents = 1900, tactics = listOf("cookie_tracking"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        runCurrent()
+
+        assertEquals(1, extractionEngine.loadCalls)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Processing)
+        assertEquals(
+            "Stabilizing secure tunnel...",
+            (processState as HomeProcessState.Processing).message,
+        )
+
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(1, extractionEngine.loadCalls)
+
+        advanceTimeBy(1)
+        advanceUntilIdle()
+        assertEquals(2, extractionEngine.loadCalls)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
     fun permissionRequired_emitsPermissionRequestAndWaitsForResult() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine().apply {
@@ -386,6 +498,21 @@ class HomeViewModelTest {
         assertEquals(1, vpnEngine.connectCalls)
 
         viewModel.onVpnPermissionResult(granted = true)
+        runCurrent()
+
+        assertEquals(1, extractionEngine.loadCalls)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Processing)
+        assertEquals(
+            "Stabilizing secure tunnel...",
+            (processState as HomeProcessState.Processing).message,
+        )
+
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(1, extractionEngine.loadCalls)
+
+        advanceTimeBy(1)
         advanceUntilIdle()
 
         assertEquals(2, extractionEngine.loadCalls)

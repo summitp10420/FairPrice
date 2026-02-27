@@ -14,6 +14,8 @@ import com.fairprice.app.engine.VpnEngine
 import com.fairprice.app.engine.VpnPermissionRequiredException
 import java.net.URI
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -56,6 +58,12 @@ class HomeViewModel(
     private val extractionEngine: ExtractionEngine,
     private val strategyEngine: PricingStrategyEngine,
 ) : ViewModel() {
+    companion object {
+        private const val TAG = "HomeViewModel"
+        private const val VPN_STABILIZATION_DELAY_MS = 2_000L
+        private const val SPOOF_EXTRACTION_MAX_ATTEMPTS = 2
+    }
+
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
     private val _vpnPermissionRequests = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
@@ -193,6 +201,8 @@ class HomeViewModel(
                     return@launch
                 }
                 vpnConnectedThisRun = true
+                Log.i(TAG, "VPN connect completed for spoof attempt")
+                awaitSpoofStabilizationGate()
 
                 _uiState.update { current ->
                     current.copy(
@@ -201,9 +211,9 @@ class HomeViewModel(
                         ),
                     )
                 }
-                val spoofedResult = extractionEngine.loadAndExtract(submittedUrl).getOrElse { throwable ->
+                val spoofedResult = extractSpoofedWithRetry(submittedUrl).getOrElse { throwable ->
                     terminalError = "Spoofed extraction failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "Spoofed extraction failed", throwable)
+                    Log.e(TAG, "Spoofed extraction failed", throwable)
                     return@launch
                 }
 
@@ -295,13 +305,15 @@ class HomeViewModel(
                     return@launch
                 }
                 vpnConnectedThisRun = true
+                Log.i(TAG, "VPN connect completed for spoof attempt after permission grant")
+                awaitSpoofStabilizationGate()
 
                 _uiState.update { current ->
                     current.copy(processState = HomeProcessState.Processing("Extracting spoofed price..."))
                 }
-                val spoofedResult = extractionEngine.loadAndExtract(pending.submittedUrl).getOrElse { throwable ->
+                val spoofedResult = extractSpoofedWithRetry(pending.submittedUrl).getOrElse { throwable ->
                     terminalError = "Spoofed extraction failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "Spoofed extraction failed after permission grant", throwable)
+                    Log.e(TAG, "Spoofed extraction failed after permission grant", throwable)
                     return@launch
                 }
 
@@ -399,6 +411,47 @@ class HomeViewModel(
         return regex.find(value)?.value
     }
 
+    private suspend fun awaitSpoofStabilizationGate() {
+        Log.i(TAG, "Starting VPN stabilization window for spoof extraction")
+        _uiState.update { current ->
+            current.copy(
+                processState = HomeProcessState.Processing("Stabilizing secure tunnel..."),
+            )
+        }
+        delay(VPN_STABILIZATION_DELAY_MS)
+        Log.i(TAG, "VPN stabilization window complete")
+    }
+
+    private suspend fun extractSpoofedWithRetry(url: String): Result<ExtractionResult> {
+        var lastFailure: Throwable? = null
+        repeat(SPOOF_EXTRACTION_MAX_ATTEMPTS) { attempt ->
+            val attemptNumber = attempt + 1
+            Log.i(
+                TAG,
+                "Starting spoof load and extract (attempt=$attemptNumber/$SPOOF_EXTRACTION_MAX_ATTEMPTS)",
+            )
+            val spoofedResult = extractionEngine.loadAndExtract(url)
+            if (spoofedResult.isSuccess) {
+                return spoofedResult
+            }
+
+            val throwable = spoofedResult.exceptionOrNull()
+            lastFailure = throwable
+            val shouldRetry =
+                attemptNumber < SPOOF_EXTRACTION_MAX_ATTEMPTS && throwable.isLikelyGeckoLifecycleChurn()
+            if (!shouldRetry) {
+                return spoofedResult
+            }
+
+            Log.w(
+                TAG,
+                "Retrying spoof extraction after likely Gecko lifecycle churn (attempt=$attemptNumber)",
+                throwable,
+            )
+        }
+        return Result.failure(lastFailure ?: IllegalStateException("Unknown spoof extraction failure"))
+    }
+
     private fun buildPriceCheck(
         url: String,
         strategyId: String?,
@@ -427,6 +480,17 @@ class HomeViewModel(
     private fun Throwable?.toUserMessage(): String {
         val throwable = this ?: return "Unknown error"
         return throwable.message ?: throwable::class.java.simpleName
+    }
+
+    private fun Throwable?.isLikelyGeckoLifecycleChurn(): Boolean {
+        val throwable = this ?: return false
+        if (throwable is TimeoutCancellationException) {
+            return true
+        }
+        val message = throwable.message.orEmpty()
+        return message.contains("timed out", ignoreCase = true) ||
+            message.contains("windoweventdispatcher", ignoreCase = true) ||
+            message.contains("geckoservicechildprocess", ignoreCase = true)
     }
 
     private fun formatUsd(cents: Int): String {
