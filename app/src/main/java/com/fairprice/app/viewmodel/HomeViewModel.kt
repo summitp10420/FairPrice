@@ -16,15 +16,25 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.mozilla.geckoview.GeckoSession
 
 sealed interface HomeProcessState {
     data object Idle : HomeProcessState
     data class Processing(val message: String) : HomeProcessState
-    data class Success(val message: String) : HomeProcessState
+    data class Success(val summary: SummaryData) : HomeProcessState
     data class Error(val message: String) : HomeProcessState
 }
+
+data class SummaryData(
+    val baselinePrice: String,
+    val spoofedPrice: String,
+    val tactics: List<String>,
+    val strategyName: String,
+)
 
 data class HomeUiState(
     val urlInput: String = "",
@@ -83,9 +93,10 @@ class HomeViewModel(
 
         viewModelScope.launch {
             var terminalError: String? = null
-            var successMessage: String? = null
+            var successSummary: SummaryData? = null
             var vpnConnectedThisRun = false
             var keepVpnForShopping = false
+            var finalShowBrowser = false
 
             try {
                 if (shoppingVpnActive) {
@@ -106,8 +117,29 @@ class HomeViewModel(
                     )
                 }
                 val baselineResult = extractionEngine.loadAndExtract(submittedUrl).getOrElse { throwable ->
-                    terminalError = "Baseline extraction failed: ${throwable.toUserMessage()}"
+                    terminalError =
+                        "Baseline extraction failed: ${throwable.toUserMessage()}. You can continue shopping normally."
                     Log.e("HomeViewModel", "Baseline extraction failed", throwable)
+                    _uiState.update { current ->
+                        current.copy(processState = HomeProcessState.Processing("Logging fallback result..."))
+                    }
+                    val fallbackPriceCheck = buildPriceCheck(
+                        url = submittedUrl,
+                        strategyId = null,
+                        baselinePriceCents = 0,
+                        foundPriceCents = 0,
+                        extractionSuccessful = false,
+                        tactics = emptyList(),
+                    )
+                    val fallbackLogResult = repository.logPriceCheck(fallbackPriceCheck)
+                    if (fallbackLogResult.isFailure) {
+                        val logThrowable = fallbackLogResult.exceptionOrNull()
+                        val logMessage =
+                            "Supabase fallback log failed: ${logThrowable.toUserMessage()}"
+                        Log.e("HomeViewModel", "price_checks fallback insert failed", logThrowable)
+                        terminalError = "$terminalError | $logMessage"
+                    }
+                    finalShowBrowser = true
                     return@launch
                 }
 
@@ -155,6 +187,7 @@ class HomeViewModel(
                     baselinePriceCents = baselineResult.priceCents,
                     foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
+                    tactics = baselineResult.tactics,
                 )
 
                 _uiState.update { current ->
@@ -169,12 +202,13 @@ class HomeViewModel(
                 }
 
                 Log.i("HomeViewModel", "price_checks insert succeeded")
-                successMessage = buildSuccessMessage(
+                successSummary = buildSuccessSummary(
                     baselineResult = baselineResult,
                     spoofedResult = spoofedResult,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
+                finalShowBrowser = false
             } finally {
                 if (vpnConnectedThisRun && !keepVpnForShopping) {
                     val disconnectResult = vpnEngine.disconnect()
@@ -189,12 +223,19 @@ class HomeViewModel(
 
                 _uiState.update { current ->
                     current.copy(
-                        showBrowser = terminalError == null && keepVpnForShopping,
+                        showBrowser = finalShowBrowser,
                         processState = terminalError?.let { HomeProcessState.Error(it) }
-                            ?: HomeProcessState.Success(successMessage ?: "Price check completed."),
+                            ?: successSummary?.let { HomeProcessState.Success(it) }
+                            ?: HomeProcessState.Idle,
                     )
                 }
             }
+        }
+    }
+
+    fun onEnterShoppingMode() {
+        _uiState.update { current ->
+            current.copy(showBrowser = true)
         }
     }
 
@@ -234,6 +275,7 @@ class HomeViewModel(
         baselinePriceCents: Int,
         foundPriceCents: Int,
         extractionSuccessful: Boolean,
+        tactics: List<String>,
     ): PriceCheck {
         val domain = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
         return PriceCheck(
@@ -243,7 +285,12 @@ class HomeViewModel(
             foundPriceCents = foundPriceCents,
             strategyId = strategyId,
             extractionSuccessful = extractionSuccessful,
-            rawExtractionData = buildJsonObject { },
+            rawExtractionData = buildJsonObject {
+                put(
+                    "detected_tactics",
+                    JsonArray(tactics.map { JsonPrimitive(it) }),
+                )
+            },
         )
     }
 
@@ -256,12 +303,17 @@ class HomeViewModel(
         return String.format(Locale.US, "$%.2f", cents / 100.0)
     }
 
-    private fun buildSuccessMessage(
+    private fun buildSuccessSummary(
         baselineResult: ExtractionResult,
         spoofedResult: ExtractionResult,
-    ): String {
+    ): SummaryData {
         val baseline = formatUsd(baselineResult.priceCents)
         val spoofed = formatUsd(spoofedResult.priceCents)
-        return "Price check logged. Baseline: $baseline | Spoofed: $spoofed."
+        return SummaryData(
+            baselinePrice = baseline,
+            spoofedPrice = spoofed,
+            tactics = baselineResult.tactics,
+            strategyName = "Default Strategy (stub)",
+        )
     }
 }

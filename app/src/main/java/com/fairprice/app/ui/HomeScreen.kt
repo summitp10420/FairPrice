@@ -28,6 +28,7 @@ fun HomeScreen(
     uiState: HomeUiState,
     onUrlChanged: (String) -> Unit,
     onCheckPriceClicked: () -> Unit,
+    onEnterShoppingMode: () -> Unit,
     onCloseShoppingSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -58,15 +59,6 @@ fun HomeScreen(
             ) {
                 Text("Check Price")
             }
-            if (uiState.showBrowser) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onCloseShoppingSession,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Close Shopping")
-                }
-            }
             when (val processState = uiState.processState) {
                 is HomeProcessState.Idle -> Unit
                 is HomeProcessState.Processing -> {
@@ -80,10 +72,34 @@ fun HomeScreen(
                 is HomeProcessState.Success -> {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = processState.message,
+                        text = "Summary",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Baseline Price: ${processState.summary.baselinePrice}")
+                    Text("Spoofed Price: ${processState.summary.spoofedPrice}")
+                    Text(
+                        "Retailer Tactics Detected: ${
+                            processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                                ?: "None"
+                        }",
+                    )
+                    Text("FairPrice Strategy Deployed: ${processState.summary.strategyName}")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onEnterShoppingMode,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Checkout Securely")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onCloseShoppingSession,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Done")
+                    }
                 }
                 is HomeProcessState.Error -> {
                     Spacer(modifier = Modifier.height(12.dp))

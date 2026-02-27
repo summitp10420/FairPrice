@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                             uiState = uiState,
                             onUrlChanged = homeViewModel::onUrlInputChanged,
                             onCheckPriceClicked = homeViewModel::onCheckPriceClicked,
+                            onEnterShoppingMode = homeViewModel::onEnterShoppingMode,
                             onCloseShoppingSession = homeViewModel::onCloseShoppingSession,
                         )
                     }

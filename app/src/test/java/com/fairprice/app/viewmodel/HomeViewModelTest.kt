@@ -16,6 +16,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -83,7 +85,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun success_keepsVpnForShoppingMode_andPersistsBaselineAndSpoofedPrices() = runTest(dispatcher) {
+    fun success_showsSummaryAndKeepsBrowserHiddenUntilCheckout() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
         val extractionEngine = FakeExtractionEngine(
@@ -132,6 +134,54 @@ class HomeViewModelTest {
         assertEquals("strat_test_123", repository.lastLoggedPriceCheck?.strategyId)
         assertEquals(1999, repository.lastLoggedPriceCheck?.baselinePriceCents)
         assertEquals(1299, repository.lastLoggedPriceCheck?.foundPriceCents)
+        val persistedTactics =
+            repository.lastLoggedPriceCheck?.rawExtractionData
+                ?.get("detected_tactics")
+                ?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+        assertEquals(listOf("cookie_tracking"), persistedTactics)
+        assertTrue(!viewModel.uiState.value.showBrowser)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Success)
+        val summary = (processState as HomeProcessState.Success).summary
+        assertEquals("$19.99", summary.baselinePrice)
+        assertEquals("$12.99", summary.spoofedPrice)
+        assertEquals(listOf("cookie_tracking"), summary.tactics)
+        assertEquals("Default Strategy (stub)", summary.strategyName)
+    }
+
+    @Test
+    fun onEnterShoppingMode_setsBrowserVisibleAfterSummary() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+        assertTrue(!viewModel.uiState.value.showBrowser)
+
+        viewModel.onEnterShoppingMode()
+        advanceUntilIdle()
         assertTrue(viewModel.uiState.value.showBrowser)
     }
 
@@ -163,7 +213,7 @@ class HomeViewModelTest {
         viewModel.onUrlInputChanged("https://example.com/p/123")
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.showBrowser)
+        assertTrue(!viewModel.uiState.value.showBrowser)
 
         viewModel.onCloseShoppingSession()
         advanceUntilIdle()
@@ -171,6 +221,54 @@ class HomeViewModelTest {
         assertEquals(1, vpnEngine.disconnectCalls)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Idle)
         assertTrue(!viewModel.uiState.value.showBrowser)
+    }
+
+    @Test
+    fun baselineFailure_logsFallbackAndAllowsClearNetBrowsing() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.failure(IllegalStateException("baseline timeout")),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(0, strategyEngine.determineCalls)
+        assertEquals(0, vpnEngine.connectCalls)
+        assertEquals(0, vpnEngine.disconnectCalls)
+        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(1, repository.logCalls)
+        assertEquals(false, repository.lastLoggedPriceCheck?.extractionSuccessful)
+        assertEquals(0, repository.lastLoggedPriceCheck?.baselinePriceCents)
+        assertEquals(0, repository.lastLoggedPriceCheck?.foundPriceCents)
+        val persistedTactics =
+            repository.lastLoggedPriceCheck?.rawExtractionData
+                ?.get("detected_tactics")
+                ?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+        assertEquals(emptyList<String>(), persistedTactics)
+        assertTrue(viewModel.uiState.value.showBrowser)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Error)
+        assertTrue((processState as HomeProcessState.Error).message.contains("continue shopping normally"))
     }
 
     @Test
