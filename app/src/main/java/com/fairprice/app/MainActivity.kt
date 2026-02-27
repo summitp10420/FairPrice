@@ -16,6 +16,7 @@ import androidx.navigation.compose.rememberNavController
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.FairPriceRepositoryImpl
 import com.fairprice.app.data.SupabaseClientProvider
+import com.fairprice.app.engine.DefaultPricingStrategyEngine
 import com.fairprice.app.engine.GeckoExtractionEngine
 import com.fairprice.app.engine.WireguardVpnEngine
 import com.fairprice.app.ui.HomeScreen
@@ -28,6 +29,7 @@ class MainActivity : ComponentActivity() {
     }
     private val vpnEngine by lazy { WireguardVpnEngine() }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
+    private val strategyEngine by lazy { DefaultPricingStrategyEngine() }
 
     private val homeViewModel: HomeViewModel by viewModels {
         object : ViewModelProvider.Factory {
@@ -38,6 +40,7 @@ class MainActivity : ComponentActivity() {
                         repository = repository,
                         vpnEngine = vpnEngine,
                         extractionEngine = extractionEngine,
+                        strategyEngine = strategyEngine,
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")

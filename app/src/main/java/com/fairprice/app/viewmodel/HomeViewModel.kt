@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.engine.ExtractionEngine
+import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.VpnEngine
 import java.net.URI
 import java.util.Locale
@@ -35,6 +36,7 @@ class HomeViewModel(
     private val repository: FairPriceRepository,
     private val vpnEngine: VpnEngine,
     private val extractionEngine: ExtractionEngine,
+    private val strategyEngine: PricingStrategyEngine,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -82,9 +84,20 @@ class HomeViewModel(
 
             try {
                 _uiState.update { current ->
+                    current.copy(
+                        processState = HomeProcessState.Processing("Determining pricing strategy..."),
+                    )
+                }
+                val strategy = strategyEngine.determineStrategy(submittedUrl).getOrElse { throwable ->
+                    terminalError = "Strategy resolution failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "Strategy resolution failed", throwable)
+                    return@launch
+                }
+
+                _uiState.update { current ->
                     current.copy(processState = HomeProcessState.Processing("Connecting to VPN..."))
                 }
-                val connectResult = vpnEngine.connect("phase3-placeholder-config")
+                val connectResult = vpnEngine.connect(strategy.wireguardConfig)
                 if (connectResult.isFailure) {
                     val throwable = connectResult.exceptionOrNull()
                     terminalError = "VPN connect failed: ${throwable.toUserMessage()}"
@@ -108,6 +121,7 @@ class HomeViewModel(
 
                 val priceCheck = buildPriceCheck(
                     url = submittedUrl,
+                    strategyId = strategy.strategyId,
                     foundPriceCents = extractedPriceCents,
                     extractionSuccessful = true,
                 )
@@ -154,6 +168,7 @@ class HomeViewModel(
 
     private fun buildPriceCheck(
         url: String,
+        strategyId: String?,
         foundPriceCents: Int,
         extractionSuccessful: Boolean,
     ): PriceCheck {
@@ -163,6 +178,7 @@ class HomeViewModel(
             domain = domain,
             baselinePriceCents = 0,
             foundPriceCents = foundPriceCents,
+            strategyId = strategyId,
             extractionSuccessful = extractionSuccessful,
             rawExtractionData = buildJsonObject { },
         )
