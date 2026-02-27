@@ -239,6 +239,12 @@ class HomeViewModel(
         }
     }
 
+    fun onBackToApp() {
+        _uiState.update { current ->
+            current.copy(showBrowser = false)
+        }
+    }
+
     fun onCloseShoppingSession() {
         viewModelScope.launch {
             var terminalError: String? = null
@@ -255,6 +261,8 @@ class HomeViewModel(
 
             _uiState.update { current ->
                 current.copy(
+                    urlInput = "",
+                    lastSubmittedUrl = null,
                     showBrowser = false,
                     processState = terminalError?.let { HomeProcessState.Error(it) }
                         ?: HomeProcessState.Idle,

@@ -1,6 +1,7 @@
 package com.fairprice.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -10,11 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.background
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
@@ -29,21 +32,20 @@ fun HomeScreen(
     onUrlChanged: (String) -> Unit,
     onCheckPriceClicked: () -> Unit,
     onEnterShoppingMode: () -> Unit,
+    onBackToApp: () -> Unit,
     onCloseShoppingSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = modifier.statusBarsPadding().fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding(),
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.Top,
         ) {
-            Text(
-                text = "FairPrice",
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Spacer(modifier = Modifier.height(20.dp))
             OutlinedTextField(
                 value = uiState.urlInput,
                 onValueChange = onUrlChanged,
@@ -74,7 +76,7 @@ fun HomeScreen(
                     Text(
                         text = "Summary",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onBackground,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Baseline Price: ${processState.summary.baselinePrice}")
@@ -129,6 +131,21 @@ fun HomeScreen(
                     Modifier.size(1.dp).alpha(0f)
                 },
             )
+        }
+
+        if (uiState.showBrowser) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(12.dp)
+                    .align(Alignment.TopEnd),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(onClick = onBackToApp) {
+                    Text("Back to App")
+                }
+            }
         }
     }
 }
