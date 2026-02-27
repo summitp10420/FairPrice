@@ -1,3 +1,6 @@
+Last Updated: 2026-02-26
+Current Phase: Phase 5 in progress (two-pass extraction + shopping mode lifecycle).
+
 1. Project Overview & Objective
 FairPrice is an Android application designed to defeat dynamic and personalized pricing strategies employed by online retailers (referencing tactics outlined in the Jan 2025 FTC report).
 
@@ -35,15 +38,26 @@ Cursor must strictly adhere to the following data flow for a price check:
 
 Ingestion: User shares a URL via the Android Share Sheet or pastes it directly into the app.
 
-Strategy & Routing: The app determines the target retailer, selects an appropriate WireGuard VPN profile (e.g., routing through a different state/country to bypass geolocation pricing), and establishes the tunnel via a Foreground Service.
+Baseline Extraction (Clear-Net): The app performs a first extraction pass without VPN and captures `ExtractionResult(priceCents, tactics)` from Gecko/WebExtension.
 
-Execution: GeckoSession loads the URL through the active VPN tunnel.
+Strategy & Routing: The app determines routing via a dedicated pricing strategy module. `PricingStrategyEngine` resolves a strategy result from `(url, baselineTactics)`. During the current stub phase, `strategyId` may be null. The ViewModel must orchestrate this step without hardcoding strategy/config values. The resolved WireGuard config is then used to establish the tunnel via a Foreground Service.
 
-Extraction: A JavaScript WebExtension running inside GeckoView extracts the DOM price data and passes a JSON payload back to the native Kotlin code via GeckoSession.MessageDelegate. (Note: If extraction fails, the app must gracefully degrade and still allow the user to view the page).
+Execution + Spoofed Extraction: GeckoSession loads the URL through the active VPN tunnel and performs a second extraction pass to capture spoofed price data.
 
-Comparison & Presentation: The app compares the extracted "Found Price" to the "Original Price", displays the savings, and renders the live GeckoView tab so the user can complete the purchase if desired.
+Extraction Payload Contract: A JavaScript WebExtension running inside GeckoView extracts DOM data and passes a JSON payload via GeckoSession.MessageDelegate with at least `{ type, priceCents, detectedTactics[] }`. Triggering must be event/DOM driven (not fixed-time delay), resilient to latency, and send once per page load.
 
-Telemetry: The app asynchronously fires the session data (original price, found price, applied strategy, location used, user notes) to the Railway API, which writes to Supabase.
+Comparison & Presentation: The app compares baseline and spoofed prices, displays outcome, and surfaces the live GeckoView tab used for the winning pass so the user can complete checkout.
+
+Shopping Mode Lifecycle: On successful spoofed extraction + logging, the app enters Shopping Mode, keeps the existing VPN/session active, and does not force a reconnect/reload. On explicit close action (or failure before Shopping Mode activation), the app disconnects VPN and resets session UI state.
+
+Telemetry: The app asynchronously logs session data (including baseline price, spoofed price, applied strategy ID when available, and extraction metadata/tactics) to Supabase through the repository layer. Railway remains a future/optional middleware path for heavier telemetry processing.
+
+3.1 Current Modular Engine Boundaries
+- Strategy Module: `PricingStrategyEngine` defines strategy selection as a pure Kotlin/domain-like seam. `DefaultPricingStrategyEngine` is the current stub implementation and can be replaced without changing UI orchestration flow.
+- Extraction Module: `ExtractionEngine` returns structured `ExtractionResult` and remains the boundary between WebExtension payload parsing and ViewModel orchestration.
+- Orchestration Boundary: `HomeViewModel` coordinates baseline extraction -> strategy -> VPN -> spoofed extraction -> persistence -> shopping mode, but does not own strategy or extraction internals.
+- Composition Root: `MainActivity` wires concrete engine implementations into `HomeViewModel` via dependency injection (ViewModel factory).
+- Persistence Contract: Successful price checks must persist baseline and spoofed prices. `strategyId` should be persisted when available and remains nullable during stub strategy phases.
 
 4. Database Schema Structure (Supabase)
 The database utilizes Supabase Auth for user management. Application data is structured as follows (Cursor should write Kotlin data classes matching these tables):
@@ -64,6 +78,12 @@ When generating code for this project, Cursor AI must follow these constraints:
 No Deprecated Views: Never use android.webkit.WebView. All web rendering and DOM interaction must be handled via org.mozilla.geckoview.
 
 Decoupled Extraction: Do not attempt synchronous DOM scraping. Use the WebExtension message-passing bridge architecture.
+
+Decoupled Strategy Resolution: Do not hardcode VPN strategy IDs or WireGuard configs in ViewModels. Strategy/config resolution must remain behind `PricingStrategyEngine`.
+
+Two-Pass Integrity: Price checks must run baseline extraction before VPN strategy application, then spoofed extraction after VPN connect. Avoid collapsing back into a single-pass flow.
+
+Shopping Session Continuity: After a successful spoofed pass, preserve the existing VPN/session for checkout. Do not reconnect/reload post-success unless explicitly required by user action.
 
 VPN Lifecycle: The WireGuard tunnel must be managed in an isolated Android Service to prevent memory leaks or app crashes when the UI is backgrounded.
 

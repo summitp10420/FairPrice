@@ -1,19 +1,19 @@
 package com.fairprice.app.engine
 
 data class StrategyResult(
-    val strategyId: String,
+    val strategyId: String?,
     val wireguardConfig: String,
 )
 
 interface PricingStrategyEngine {
-    suspend fun determineStrategy(url: String): Result<StrategyResult>
+    suspend fun determineStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult>
 }
 
 class DefaultPricingStrategyEngine : PricingStrategyEngine {
-    override suspend fun determineStrategy(url: String): Result<StrategyResult> {
+    override suspend fun determineStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
         return Result.success(
             StrategyResult(
-                strategyId = "strat_stub_001",
+                strategyId = null,
                 wireguardConfig = "phase3-placeholder-config",
             ),
         )

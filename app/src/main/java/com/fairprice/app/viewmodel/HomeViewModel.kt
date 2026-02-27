@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.engine.ExtractionEngine
+import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.VpnEngine
 import java.net.URI
@@ -30,6 +31,7 @@ data class HomeUiState(
     val lastSubmittedUrl: String? = null,
     val processState: HomeProcessState = HomeProcessState.Idle,
     val activeSession: GeckoSession? = null,
+    val showBrowser: Boolean = false,
 )
 
 class HomeViewModel(
@@ -40,6 +42,7 @@ class HomeViewModel(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+    private var shoppingVpnActive: Boolean = false
 
     init {
         viewModelScope.launch {
@@ -72,6 +75,7 @@ class HomeViewModel(
             current.copy(
                 lastSubmittedUrl = submittedUrl,
                 processState = HomeProcessState.Idle,
+                showBrowser = false,
             )
         }
 
@@ -80,22 +84,48 @@ class HomeViewModel(
         viewModelScope.launch {
             var terminalError: String? = null
             var successMessage: String? = null
-            var isVpnConnected = false
+            var vpnConnectedThisRun = false
+            var keepVpnForShopping = false
 
             try {
+                if (shoppingVpnActive) {
+                    val disconnectResult = vpnEngine.disconnect()
+                    if (disconnectResult.isFailure) {
+                        val throwable = disconnectResult.exceptionOrNull()
+                        terminalError =
+                            "VPN disconnect failed before new check: ${throwable.toUserMessage()}"
+                        Log.e("HomeViewModel", "VPN disconnect failed before restart", throwable)
+                        return@launch
+                    }
+                    shoppingVpnActive = false
+                }
+
                 _uiState.update { current ->
                     current.copy(
-                        processState = HomeProcessState.Processing("Determining pricing strategy..."),
+                        processState = HomeProcessState.Processing("Gathering baseline price..."),
                     )
                 }
-                val strategy = strategyEngine.determineStrategy(submittedUrl).getOrElse { throwable ->
-                    terminalError = "Strategy resolution failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "Strategy resolution failed", throwable)
+                val baselineResult = extractionEngine.loadAndExtract(submittedUrl).getOrElse { throwable ->
+                    terminalError = "Baseline extraction failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "Baseline extraction failed", throwable)
                     return@launch
                 }
 
                 _uiState.update { current ->
-                    current.copy(processState = HomeProcessState.Processing("Connecting to VPN..."))
+                    current.copy(processState = HomeProcessState.Processing("Determining strategy..."))
+                }
+                val strategy =
+                    strategyEngine.determineStrategy(
+                        url = submittedUrl,
+                        baselineTactics = baselineResult.tactics,
+                    ).getOrElse { throwable ->
+                        terminalError = "Strategy resolution failed: ${throwable.toUserMessage()}"
+                        Log.e("HomeViewModel", "Strategy resolution failed", throwable)
+                        return@launch
+                    }
+
+                _uiState.update { current ->
+                    current.copy(processState = HomeProcessState.Processing("Connecting VPN..."))
                 }
                 val connectResult = vpnEngine.connect(strategy.wireguardConfig)
                 if (connectResult.isFailure) {
@@ -104,25 +134,26 @@ class HomeViewModel(
                     Log.e("HomeViewModel", "VPN connect failed", throwable)
                     return@launch
                 }
-                isVpnConnected = true
+                vpnConnectedThisRun = true
 
                 _uiState.update { current ->
                     current.copy(
                         processState = HomeProcessState.Processing(
-                            "Loading page & extracting price...",
+                            "Extracting spoofed price...",
                         ),
                     )
                 }
-                val extractedPriceCents = extractionEngine.loadAndExtract(submittedUrl).getOrElse { throwable ->
-                    terminalError = "Price extraction failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "Price extraction failed", throwable)
+                val spoofedResult = extractionEngine.loadAndExtract(submittedUrl).getOrElse { throwable ->
+                    terminalError = "Spoofed extraction failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "Spoofed extraction failed", throwable)
                     return@launch
                 }
 
                 val priceCheck = buildPriceCheck(
                     url = submittedUrl,
                     strategyId = strategy.strategyId,
-                    foundPriceCents = extractedPriceCents,
+                    baselinePriceCents = baselineResult.priceCents,
+                    foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
                 )
 
@@ -138,9 +169,14 @@ class HomeViewModel(
                 }
 
                 Log.i("HomeViewModel", "price_checks insert succeeded")
-                successMessage = "Price check logged. Extracted price: ${formatUsd(extractedPriceCents)}."
+                successMessage = buildSuccessMessage(
+                    baselineResult = baselineResult,
+                    spoofedResult = spoofedResult,
+                )
+                keepVpnForShopping = true
+                shoppingVpnActive = true
             } finally {
-                if (isVpnConnected) {
+                if (vpnConnectedThisRun && !keepVpnForShopping) {
                     val disconnectResult = vpnEngine.disconnect()
                     if (disconnectResult.isFailure) {
                         val throwable = disconnectResult.exceptionOrNull()
@@ -148,14 +184,40 @@ class HomeViewModel(
                         Log.e("HomeViewModel", "VPN disconnect failed", throwable)
                         terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
                     }
+                    shoppingVpnActive = false
                 }
 
                 _uiState.update { current ->
                     current.copy(
+                        showBrowser = terminalError == null && keepVpnForShopping,
                         processState = terminalError?.let { HomeProcessState.Error(it) }
                             ?: HomeProcessState.Success(successMessage ?: "Price check completed."),
                     )
                 }
+            }
+        }
+    }
+
+    fun onCloseShoppingSession() {
+        viewModelScope.launch {
+            var terminalError: String? = null
+            if (shoppingVpnActive) {
+                val disconnectResult = vpnEngine.disconnect()
+                if (disconnectResult.isFailure) {
+                    val throwable = disconnectResult.exceptionOrNull()
+                    terminalError = "VPN disconnect failed: ${throwable.toUserMessage()}"
+                    Log.e("HomeViewModel", "VPN disconnect failed on close", throwable)
+                } else {
+                    shoppingVpnActive = false
+                }
+            }
+
+            _uiState.update { current ->
+                current.copy(
+                    showBrowser = false,
+                    processState = terminalError?.let { HomeProcessState.Error(it) }
+                        ?: HomeProcessState.Idle,
+                )
             }
         }
     }
@@ -169,6 +231,7 @@ class HomeViewModel(
     private fun buildPriceCheck(
         url: String,
         strategyId: String?,
+        baselinePriceCents: Int,
         foundPriceCents: Int,
         extractionSuccessful: Boolean,
     ): PriceCheck {
@@ -176,7 +239,7 @@ class HomeViewModel(
         return PriceCheck(
             productUrl = url,
             domain = domain,
-            baselinePriceCents = 0,
+            baselinePriceCents = baselinePriceCents,
             foundPriceCents = foundPriceCents,
             strategyId = strategyId,
             extractionSuccessful = extractionSuccessful,
@@ -191,5 +254,14 @@ class HomeViewModel(
 
     private fun formatUsd(cents: Int): String {
         return String.format(Locale.US, "$%.2f", cents / 100.0)
+    }
+
+    private fun buildSuccessMessage(
+        baselineResult: ExtractionResult,
+        spoofedResult: ExtractionResult,
+    ): String {
+        val baseline = formatUsd(baselineResult.priceCents)
+        val spoofed = formatUsd(spoofedResult.priceCents)
+        return "Price check logged. Baseline: $baseline | Spoofed: $spoofed."
     }
 }

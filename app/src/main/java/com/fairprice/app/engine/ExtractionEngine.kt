@@ -23,8 +23,13 @@ import org.mozilla.geckoview.WebExtension
 
 interface ExtractionEngine {
     val currentSession: StateFlow<GeckoSession?>
-    suspend fun loadAndExtract(url: String): Result<Int>
+    suspend fun loadAndExtract(url: String): Result<ExtractionResult>
 }
+
+data class ExtractionResult(
+    val priceCents: Int,
+    val tactics: List<String>,
+)
 
 class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private val runtime: GeckoRuntime = GeckoRuntime.getDefault(context)
@@ -49,7 +54,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         )
     }
 
-    override suspend fun loadAndExtract(url: String): Result<Int> = runCatching {
+    override suspend fun loadAndExtract(url: String): Result<ExtractionResult> = runCatching {
         Log.i("GeckoExtractionEngine", "Starting loadAndExtract for URL: $url")
         val extension = awaitBuiltInExtension()
         val session = createFreshSession()
@@ -141,7 +146,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
 
     private fun setPendingExtraction(
         session: GeckoSession,
-        continuation: CancellableContinuation<Int>,
+        continuation: CancellableContinuation<ExtractionResult>,
     ) {
         synchronized(pendingLock) {
             pendingExtraction?.continuation?.cancel(
@@ -151,7 +156,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private fun clearPendingExtraction(continuation: CancellableContinuation<Int>) {
+    private fun clearPendingExtraction(continuation: CancellableContinuation<ExtractionResult>) {
         synchronized(pendingLock) {
             if (pendingExtraction?.continuation === continuation) {
                 pendingExtraction = null
@@ -181,13 +186,19 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             Log.i("GeckoExtractionEngine", "Received PRICE_EXTRACT message with ${payload.priceCents} cents.")
 
             mainScope.launch {
-                resumePendingExtraction(sender.session, payload.priceCents)
+                resumePendingExtraction(
+                    sender.session,
+                    ExtractionResult(
+                        priceCents = payload.priceCents,
+                        tactics = payload.detectedTactics,
+                    ),
+                )
             }
             return null
         }
     }
 
-    private fun resumePendingExtraction(senderSession: GeckoSession?, priceCents: Int) {
+    private fun resumePendingExtraction(senderSession: GeckoSession?, result: ExtractionResult) {
         val pending = synchronized(pendingLock) {
             val current = pendingExtraction ?: return
             if (senderSession != null && senderSession !== current.session) {
@@ -198,7 +209,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             current
         }
         if (pending.continuation.isActive) {
-            pending.continuation.resume(priceCents)
+            pending.continuation.resume(result)
             Log.i("GeckoExtractionEngine", "Extraction continuation resumed successfully.")
         }
     }
@@ -210,7 +221,12 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                 if (!message.has("priceCents")) return null
                 val priceCents = message.optInt("priceCents", -1)
                 if (priceCents < 0) return null
-                PriceExtractMessage(type = type, priceCents = priceCents)
+                val detectedTactics = parseTacticsFromJson(message)
+                PriceExtractMessage(
+                    type = type,
+                    priceCents = priceCents,
+                    detectedTactics = detectedTactics,
+                )
             }
             is Map<*, *> -> {
                 val type = message["type"] as? String ?: return null
@@ -221,20 +237,47 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                     else -> return null
                 }
                 if (priceCents < 0) return null
-                PriceExtractMessage(type = type, priceCents = priceCents)
+                val detectedTactics = parseTacticsFromMap(message)
+                PriceExtractMessage(
+                    type = type,
+                    priceCents = priceCents,
+                    detectedTactics = detectedTactics,
+                )
             }
             else -> null
         }
     }
 
+    private fun parseTacticsFromJson(message: JSONObject): List<String> {
+        if (!message.has("detectedTactics")) return emptyList()
+        val rawTactics = message.optJSONArray("detectedTactics") ?: return emptyList()
+        val tactics = mutableListOf<String>()
+        for (index in 0 until rawTactics.length()) {
+            val tactic = rawTactics.optString(index, "").trim()
+            if (tactic.isNotEmpty()) {
+                tactics += tactic
+            }
+        }
+        return tactics
+    }
+
+    private fun parseTacticsFromMap(message: Map<*, *>): List<String> {
+        val raw = message["detectedTactics"] ?: return emptyList()
+        val list = raw as? List<*> ?: return emptyList()
+        return list.mapNotNull { item ->
+            (item as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
+
     private data class PendingExtraction(
         val session: GeckoSession,
-        val continuation: CancellableContinuation<Int>,
+        val continuation: CancellableContinuation<ExtractionResult>,
     )
 
     private data class PriceExtractMessage(
         val type: String,
         val priceCents: Int,
+        val detectedTactics: List<String>,
     )
 
     private companion object {

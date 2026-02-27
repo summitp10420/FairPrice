@@ -3,6 +3,7 @@ package com.fairprice.app.viewmodel
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.engine.ExtractionEngine
+import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
@@ -44,7 +45,16 @@ class HomeViewModelTest {
     fun strategyFailure_setsErrorAndSkipsVpnAndExtraction() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
-        val extractionEngine = FakeExtractionEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(
+                    ExtractionResult(
+                        priceCents = 1500,
+                        tactics = listOf("hidden_canvas"),
+                    ),
+                ),
+            ),
+        )
         val strategyEngine = FakeStrategyEngine(
             result = Result.failure(IllegalStateException("no strategy match")),
         )
@@ -60,9 +70,10 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(listOf("hidden_canvas"), strategyEngine.lastBaselineTactics)
         assertEquals(0, vpnEngine.connectCalls)
         assertEquals(0, vpnEngine.disconnectCalls)
-        assertEquals(0, extractionEngine.loadCalls)
+        assertEquals(1, extractionEngine.loadCalls)
         assertEquals(0, repository.logCalls)
 
         val processState = viewModel.uiState.value.processState
@@ -72,10 +83,25 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun strategySuccess_usesResolvedConfigAndPersistsStrategyId() = runTest(dispatcher) {
+    fun success_keepsVpnForShoppingMode_andPersistsBaselineAndSpoofedPrices() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
-        val extractionEngine = FakeExtractionEngine(extractionResult = Result.success(1299))
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(
+                    ExtractionResult(
+                        priceCents = 1999,
+                        tactics = listOf("cookie_tracking"),
+                    ),
+                ),
+                Result.success(
+                    ExtractionResult(
+                        priceCents = 1299,
+                        tactics = listOf("hidden_canvas"),
+                    ),
+                ),
+            ),
+        )
         val strategyEngine = FakeStrategyEngine(
             result = Result.success(
                 StrategyResult(
@@ -96,22 +122,104 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, strategyEngine.determineCalls)
+        assertEquals(listOf("cookie_tracking"), strategyEngine.lastBaselineTactics)
         assertEquals(1, vpnEngine.connectCalls)
         assertEquals("wg-test-config", vpnEngine.lastConnectConfig)
-        assertEquals(1, vpnEngine.disconnectCalls)
-        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(0, vpnEngine.disconnectCalls)
+        assertEquals(2, extractionEngine.loadCalls)
         assertEquals(1, repository.logCalls)
         assertNotNull(repository.lastLoggedPriceCheck)
         assertEquals("strat_test_123", repository.lastLoggedPriceCheck?.strategyId)
+        assertEquals(1999, repository.lastLoggedPriceCheck?.baselinePriceCents)
+        assertEquals(1299, repository.lastLoggedPriceCheck?.foundPriceCents)
+        assertTrue(viewModel.uiState.value.showBrowser)
+    }
+
+    @Test
+    fun closeShoppingSession_disconnectsVpnAndResetsState() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.showBrowser)
+
+        viewModel.onCloseShoppingSession()
+        advanceUntilIdle()
+
+        assertEquals(1, vpnEngine.disconnectCalls)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Idle)
+        assertTrue(!viewModel.uiState.value.showBrowser)
+    }
+
+    @Test
+    fun spoofedExtractionFailure_disconnectsVpnAndShowsError() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.failure(IllegalStateException("spoofed failed")),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(1, vpnEngine.connectCalls)
+        assertEquals(1, vpnEngine.disconnectCalls)
+        assertTrue(!viewModel.uiState.value.showBrowser)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
     }
 
     private class FakeStrategyEngine(
         var result: Result<StrategyResult>,
     ) : PricingStrategyEngine {
         var determineCalls: Int = 0
+        var lastBaselineTactics: List<String> = emptyList()
 
-        override suspend fun determineStrategy(url: String): Result<StrategyResult> {
+        override suspend fun determineStrategy(
+            url: String,
+            baselineTactics: List<String>,
+        ): Result<StrategyResult> {
             determineCalls += 1
+            lastBaselineTactics = baselineTactics
             return result
         }
     }
@@ -136,15 +244,21 @@ class HomeViewModelTest {
     }
 
     private class FakeExtractionEngine(
-        var extractionResult: Result<Int> = Result.success(1099),
+        var extractionResults: MutableList<Result<ExtractionResult>> = mutableListOf(
+            Result.success(ExtractionResult(priceCents = 1099, tactics = emptyList())),
+        ),
     ) : ExtractionEngine {
         private val sessionState = MutableStateFlow<GeckoSession?>(null)
         override val currentSession: StateFlow<GeckoSession?> = sessionState
         var loadCalls: Int = 0
 
-        override suspend fun loadAndExtract(url: String): Result<Int> {
+        override suspend fun loadAndExtract(url: String): Result<ExtractionResult> {
             loadCalls += 1
-            return extractionResult
+            return if (extractionResults.isEmpty()) {
+                Result.failure(IllegalStateException("No extraction result configured"))
+            } else {
+                extractionResults.removeAt(0)
+            }
         }
     }
 

@@ -28,6 +28,7 @@ fun HomeScreen(
     uiState: HomeUiState,
     onUrlChanged: (String) -> Unit,
     onCheckPriceClicked: () -> Unit,
+    onCloseShoppingSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -56,6 +57,15 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Check Price")
+            }
+            if (uiState.showBrowser) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onCloseShoppingSession,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Close Shopping")
+                }
             }
             when (val processState = uiState.processState) {
                 is HomeProcessState.Idle -> Unit
@@ -97,7 +107,11 @@ fun HomeScreen(
                 update = { view ->
                     view.setSession(session)
                 },
-                modifier = Modifier.size(1.dp).alpha(0f),
+                modifier = if (uiState.showBrowser) {
+                    Modifier.fillMaxSize().alpha(1f)
+                } else {
+                    Modifier.size(1.dp).alpha(0f)
+                },
             )
         }
     }
