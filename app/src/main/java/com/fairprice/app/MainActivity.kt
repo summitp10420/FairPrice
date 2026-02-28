@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
                     composable("home") {
                         HomeScreen(
                             uiState = uiState,
+                            onDirtyBaselineChanged = homeViewModel::onDirtyBaselineInputChanged,
                             onUrlChanged = homeViewModel::onUrlInputChanged,
                             onCheckPriceClicked = homeViewModel::onCheckPriceClicked,
                             onEnterShoppingMode = homeViewModel::onEnterShoppingMode,

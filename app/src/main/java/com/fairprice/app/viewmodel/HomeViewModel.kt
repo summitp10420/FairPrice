@@ -46,6 +46,9 @@ sealed interface HomeProcessState {
 data class SummaryData(
     val baselinePrice: String,
     val spoofedPrice: String,
+    val dirtyBaselinePrice: String?,
+    val potentialSavings: String?,
+    val isVictory: Boolean,
     val tactics: List<String>,
     val strategyName: String,
     val vpnConfig: String,
@@ -58,6 +61,7 @@ data class SummaryData(
 
 data class HomeUiState(
     val urlInput: String = "",
+    val dirtyBaselineInputRaw: String = "",
     val lastSubmittedUrl: String? = null,
     val processState: HomeProcessState = HomeProcessState.Idle,
     val activeSession: GeckoSession? = null,
@@ -138,6 +142,13 @@ class HomeViewModel(
         }
     }
 
+    fun onDirtyBaselineInputChanged(value: String) {
+        val sanitized = sanitizeDigitsOnly(value)
+        _uiState.update { current ->
+            current.copy(dirtyBaselineInputRaw = sanitized)
+        }
+    }
+
     fun onSharedTextReceived(sharedText: String?) {
         val extractedUrl = extractFirstUrl(sharedText).orEmpty()
         if (extractedUrl.isNotBlank()) {
@@ -149,6 +160,7 @@ class HomeViewModel(
 
     fun onCheckPriceClicked() {
         val rawSubmittedUrl = _uiState.value.urlInput.trim()
+        val dirtyBaselinePriceCents = parseDirtyBaselineCents(_uiState.value.dirtyBaselineInputRaw)
         _uiState.update { current ->
             current.copy(
                 lastSubmittedUrl = rawSubmittedUrl,
@@ -230,6 +242,7 @@ class HomeViewModel(
                         degraded = true,
                         baselineSuccess = false,
                         spoofSuccess = false,
+                        dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
                     )
                     val fallbackLogResult = repository.logPriceCheckRun(fallbackPriceCheck, attemptRows)
@@ -284,6 +297,7 @@ class HomeViewModel(
                             degraded = false,
                             baselineSuccess = true,
                             spoofSuccess = false,
+                            dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                             diagnostics = diagnostics,
                         )
                         repository.logPriceCheckRun(failedPriceCheck, attemptRows)
@@ -314,6 +328,7 @@ class HomeViewModel(
                                 submittedUrl = submittedUrl,
                                 baselineResult = baselineExtraction,
                                 strategy = strategy,
+                                dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                                 attemptIndex = attempt,
                                 waitingConfig = config,
                                 attemptedConfigs = attemptedConfigs.toList(),
@@ -383,6 +398,7 @@ class HomeViewModel(
                         degraded = true,
                         baselineSuccess = true,
                         spoofSuccess = false,
+                        dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
                     )
                     _uiState.update { current ->
@@ -407,6 +423,7 @@ class HomeViewModel(
                     degraded = false,
                     baselineSuccess = true,
                     spoofSuccess = true,
+                    dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
                 )
 
@@ -425,6 +442,7 @@ class HomeViewModel(
                 successSummary = buildSuccessSummary(
                     baselineResult = baselineExtraction,
                     spoofedResult = spoofedResult,
+                    dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                     strategy = strategy,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: strategy.wireguardConfig,
@@ -498,6 +516,7 @@ class HomeViewModel(
                     degraded = true,
                     baselineSuccess = true,
                     spoofSuccess = false,
+                    dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
                 )
                 repository.logPriceCheckRun(deniedPriceCheck, attemptRows)
@@ -618,6 +637,7 @@ class HomeViewModel(
                         degraded = true,
                         baselineSuccess = true,
                         spoofSuccess = false,
+                        dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
                     )
                     repository.logPriceCheckRun(failedPriceCheck, attemptRows)
@@ -639,6 +659,7 @@ class HomeViewModel(
                     degraded = false,
                     baselineSuccess = true,
                     spoofSuccess = true,
+                    dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
                 )
 
@@ -656,6 +677,7 @@ class HomeViewModel(
                 successSummary = buildSuccessSummary(
                     baselineResult = pending.baselineResult,
                     spoofedResult = spoofedResult,
+                    dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     strategy = pending.strategy,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: pending.waitingConfig,
@@ -714,6 +736,7 @@ class HomeViewModel(
             _uiState.update { current ->
                 current.copy(
                     urlInput = "",
+                    dirtyBaselineInputRaw = "",
                     lastSubmittedUrl = null,
                     showBrowser = false,
                     processState = terminalError?.let { HomeProcessState.Error(it) }
@@ -849,6 +872,7 @@ class HomeViewModel(
         degraded: Boolean,
         baselineSuccess: Boolean,
         spoofSuccess: Boolean,
+        dirtyBaselinePriceCents: Int?,
         diagnostics: List<String>,
     ): PriceCheck {
         val domain = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
@@ -867,6 +891,7 @@ class HomeViewModel(
             degraded = degraded,
             baselineSuccess = baselineSuccess,
             spoofSuccess = spoofSuccess,
+            dirtyBaselinePriceCents = dirtyBaselinePriceCents,
             rawExtractionData = buildJsonObject {
                 put(
                     "detected_tactics",
@@ -914,10 +939,6 @@ class HomeViewModel(
     }
 
     private suspend fun ensureBaselineVpnActive(): String? {
-        if (activeVpnConfig == BASELINE_VPN_CONFIG) {
-            Log.i(TAG, "Baseline VPN already active; skipping reconnect.")
-            return null
-        }
         val connectResult = vpnEngine.connect(BASELINE_VPN_CONFIG)
         if (connectResult.isFailure) {
             val throwable = connectResult.exceptionOrNull()
@@ -936,6 +957,7 @@ class HomeViewModel(
     private fun buildSuccessSummary(
         baselineResult: ExtractionResult,
         spoofedResult: ExtractionResult,
+        dirtyBaselinePriceCents: Int?,
         strategy: StrategyResult,
         attemptedConfigs: List<String>,
         finalConfig: String,
@@ -945,9 +967,14 @@ class HomeViewModel(
     ): SummaryData {
         val baseline = formatUsd(baselineResult.priceCents)
         val spoofed = formatUsd(spoofedResult.priceCents)
+        val potentialSavingsCents = dirtyBaselinePriceCents?.minus(spoofedResult.priceCents)
+        val isVictory = (potentialSavingsCents ?: 0) > 0
         return SummaryData(
             baselinePrice = baseline,
             spoofedPrice = spoofed,
+            dirtyBaselinePrice = dirtyBaselinePriceCents?.let(::formatUsd),
+            potentialSavings = potentialSavingsCents?.takeIf { it > 0 }?.let(::formatUsd),
+            isVictory = isVictory,
             tactics = baselineResult.tactics,
             strategyName = DEFAULT_STRATEGY_NAME,
             vpnConfig = strategy.wireguardConfig,
@@ -984,10 +1011,19 @@ class HomeViewModel(
         val submittedUrl: String,
         val baselineResult: ExtractionResult,
         val strategy: StrategyResult,
+        val dirtyBaselinePriceCents: Int?,
         val attemptIndex: Int,
         val waitingConfig: String,
         val attemptedConfigs: List<String>,
         val diagnostics: List<String>,
         val attemptRows: List<PriceCheckAttempt>,
     )
+
+    private fun sanitizeDigitsOnly(value: String): String = value.filter(Char::isDigit)
+
+    private fun parseDirtyBaselineCents(raw: String): Int? {
+        val normalized = sanitizeDigitsOnly(raw)
+        if (normalized.isBlank()) return null
+        return normalized.toIntOrNull()
+    }
 }

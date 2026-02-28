@@ -9,7 +9,8 @@ alter table public.price_checks
     add column if not exists outcome text,
     add column if not exists degraded boolean not null default false,
     add column if not exists baseline_success boolean not null default false,
-    add column if not exists spoof_success boolean not null default false;
+    add column if not exists spoof_success boolean not null default false,
+    add column if not exists dirty_baseline_price_cents integer;
 
 create table if not exists public.price_check_attempts (
     id uuid primary key default gen_random_uuid(),

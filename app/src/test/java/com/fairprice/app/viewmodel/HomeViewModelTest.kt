@@ -153,6 +153,9 @@ class HomeViewModelTest {
         val summary = (processState as HomeProcessState.Success).summary
         assertEquals("$19.99", summary.baselinePrice)
         assertEquals("$12.99", summary.spoofedPrice)
+        assertEquals(null, summary.dirtyBaselinePrice)
+        assertEquals(null, summary.potentialSavings)
+        assertEquals(false, summary.isVictory)
         assertEquals(listOf("cookie_tracking"), summary.tactics)
         assertEquals("Default Strategy (stub)", summary.strategyName)
         assertEquals("wg-test-config", summary.vpnConfig)
@@ -269,6 +272,56 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun dirtyBaselineInput_sanitizesToDigitsOnly() = runTest(dispatcher) {
+        val viewModel = HomeViewModel(
+            repository = FakeRepository(),
+            vpnEngine = FakeVpnEngine(),
+            extractionEngine = FakeExtractionEngine(),
+            strategyEngine = FakeStrategyEngine(
+                result = Result.success(
+                    StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                ),
+            ),
+        )
+
+        viewModel.onDirtyBaselineInputChanged("$44.95abc")
+        advanceUntilIdle()
+
+        assertEquals("4495", viewModel.uiState.value.dirtyBaselineInputRaw)
+    }
+
+    @Test
+    fun success_withDirtyBaseline_calculatesSavingsAndPersistsTelemetry() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = FakeVpnEngine(),
+            extractionEngine = FakeExtractionEngine(
+                extractionResults = mutableListOf(
+                    Result.success(ExtractionResult(priceCents = 2500, tactics = emptyList())),
+                    Result.success(ExtractionResult(priceCents = 1299, tactics = emptyList())),
+                ),
+            ),
+            strategyEngine = FakeStrategyEngine(
+                result = Result.success(
+                    StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                ),
+            ),
+        )
+
+        viewModel.onDirtyBaselineInputChanged("4495")
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        val success = viewModel.uiState.value.processState as HomeProcessState.Success
+        assertEquals("$44.95", success.summary.dirtyBaselinePrice)
+        assertEquals("$31.96", success.summary.potentialSavings)
+        assertEquals(true, success.summary.isVictory)
+        assertEquals(4495, repository.lastLoggedPriceCheck?.dirtyBaselinePriceCents)
+    }
+
+    @Test
     fun closeShoppingSession_revertsToBaselineAndResetsState() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
@@ -293,6 +346,7 @@ class HomeViewModelTest {
             strategyEngine = strategyEngine,
         )
 
+        viewModel.onDirtyBaselineInputChanged("4495")
         viewModel.onUrlInputChanged("https://example.com/p/123")
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
@@ -305,7 +359,44 @@ class HomeViewModelTest {
         assertEquals("baseline_saltlake_ut-US-UT-137.conf", vpnEngine.lastConnectConfig)
         assertEquals(0, vpnEngine.disconnectCalls)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Idle)
+        assertEquals("", viewModel.uiState.value.dirtyBaselineInputRaw)
         assertTrue(!viewModel.uiState.value.showBrowser)
+    }
+
+    @Test
+    fun closeShoppingSession_whenBaselineReconnectFails_setsError() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine().apply {
+            connectResults = mutableListOf(
+                Result.success(Unit),
+                Result.failure(IllegalStateException("baseline reconnect failed")),
+            )
+        }
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = FakeExtractionEngine(
+                extractionResults = mutableListOf(
+                    Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                    Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+                ),
+            ),
+            strategyEngine = FakeStrategyEngine(
+                result = Result.success(
+                    StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                ),
+            ),
+        )
+
+        viewModel.onDirtyBaselineInputChanged("4495")
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        viewModel.onCloseShoppingSession()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
     }
 
     @Test

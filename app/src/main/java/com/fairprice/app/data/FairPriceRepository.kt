@@ -113,6 +113,7 @@ class FairPriceRepositoryImpl(
             degraded = null,
             baselineSuccess = null,
             spoofSuccess = null,
+            dirtyBaselinePriceCents = null,
         )
     }
 
