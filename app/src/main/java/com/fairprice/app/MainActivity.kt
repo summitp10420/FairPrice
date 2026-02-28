@@ -22,6 +22,7 @@ import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.FairPriceRepositoryImpl
 import com.fairprice.app.data.SupabaseClientProvider
 import com.fairprice.app.engine.DefaultPricingStrategyEngine
+import com.fairprice.app.engine.AssetVpnRotationEngine
 import com.fairprice.app.engine.GeckoExtractionEngine
 import com.fairprice.app.engine.WireguardVpnEngine
 import com.fairprice.app.ui.HomeScreen
@@ -34,6 +35,7 @@ class MainActivity : ComponentActivity() {
         FairPriceRepositoryImpl(SupabaseClientProvider.client)
     }
     private val vpnEngine by lazy { WireguardVpnEngine(applicationContext) }
+    private val vpnRotationEngine by lazy { AssetVpnRotationEngine(applicationContext) }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
     private val strategyEngine by lazy { DefaultPricingStrategyEngine() }
 
@@ -51,6 +53,7 @@ class MainActivity : ComponentActivity() {
                     return HomeViewModel(
                         repository = repository,
                         vpnEngine = vpnEngine,
+                        vpnRotationEngine = vpnRotationEngine,
                         extractionEngine = extractionEngine,
                         strategyEngine = strategyEngine,
                     ) as T

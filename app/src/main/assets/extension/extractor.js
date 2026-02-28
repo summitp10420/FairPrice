@@ -67,6 +67,46 @@
     return null;
   }
 
+  function isAmazonProductPage() {
+    const host = String(window.location.host || "").toLowerCase();
+    if (host.includes("amazon.") || host === "a.co" || host.endsWith(".a.co")) {
+      return true;
+    }
+    return Boolean(
+      document.querySelector("#dp") ||
+        document.querySelector("#productTitle") ||
+        document.querySelector("#corePrice_feature_div"),
+    );
+  }
+
+  function extractAmazonCandidateCents(selector) {
+    const nodes = document.querySelectorAll(selector);
+    for (const node of nodes) {
+      const cents = normalizePriceToCents(node.textContent || node.getAttribute("content"));
+      if (cents != null) return cents;
+    }
+    return null;
+  }
+
+  function extractAmazonPriceCents() {
+    const selectors = [
+      "#corePrice_feature_div .a-price .a-offscreen",
+      "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
+      "#apex_desktop .a-price .a-offscreen",
+      "#price_inside_buybox",
+      "#newBuyBoxPrice",
+      "#priceblock_ourprice",
+      "#priceblock_dealprice",
+      ".a-price.aok-align-center .a-offscreen",
+      ".a-price .a-offscreen",
+    ];
+    for (const selector of selectors) {
+      const cents = extractAmazonCandidateCents(selector);
+      if (cents != null) return cents;
+    }
+    return null;
+  }
+
   function extractPelicanFallbackPriceCents() {
     const selectors = [
       ".price",
@@ -112,15 +152,32 @@
   }
 
   function buildPayload() {
-    const jsonLdCents = extractJsonLdPriceCents();
-    const fallbackCents = jsonLdCents == null ? extractPelicanFallbackPriceCents() : null;
-    const resolvedPrice = jsonLdCents ?? fallbackCents;
+    let extractionPath = "none";
+
+    const amazonCents = isAmazonProductPage() ? extractAmazonPriceCents() : null;
+    if (amazonCents != null) {
+      extractionPath = "amazon_dom";
+    }
+
+    const jsonLdCents = amazonCents == null ? extractJsonLdPriceCents() : null;
+    if (jsonLdCents != null) {
+      extractionPath = "json_ld";
+    }
+
+    const fallbackCents =
+      amazonCents == null && jsonLdCents == null ? extractPelicanFallbackPriceCents() : null;
+    if (fallbackCents != null) {
+      extractionPath = "fallback_dom";
+    }
+
+    const resolvedPrice = amazonCents ?? jsonLdCents ?? fallbackCents;
     if (resolvedPrice == null) return null;
 
     return {
       type: "PRICE_EXTRACT",
       priceCents: resolvedPrice,
       detectedTactics: sniffTactics(),
+      debugExtractionPath: extractionPath,
     };
   }
 

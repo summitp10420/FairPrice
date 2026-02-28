@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -89,22 +91,43 @@ fun HomeScreen(
                 }
                 is HomeProcessState.Success -> {
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Summary",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Baseline Price: ${processState.summary.baselinePrice}")
-                    Text("Spoofed Price: ${processState.summary.spoofedPrice}")
-                    Text(
-                        "Retailer Tactics Detected: ${
-                            processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
-                                ?: "None"
-                        }",
-                    )
-                    Text("Strategy Deployed: ${processState.summary.strategyName}")
-                    Text("VPN Config Loaded: ${processState.summary.vpnConfig}")
+                    Column(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        Text(
+                            text = "Summary",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Baseline Price: ${processState.summary.baselinePrice}")
+                        Text("Spoofed Price: ${processState.summary.spoofedPrice}")
+                        Text(
+                            "Retailer Tactics Detected: ${
+                                processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                                    ?: "None"
+                            }",
+                        )
+                        Text("Strategy Deployed: ${processState.summary.strategyName}")
+                        Text("VPN Config Loaded: ${processState.summary.vpnConfig}")
+                        Text(
+                            "Attempted Config Chain: ${
+                                processState.summary.attemptedConfigs.takeIf { it.isNotEmpty() }?.joinToString(" -> ")
+                                    ?: "None"
+                            }",
+                        )
+                        Text("Final Config: ${processState.summary.finalConfig}")
+                        Text("Retry Count: ${processState.summary.retryCount}")
+                        Text("Outcome: ${processState.summary.outcome}")
+                        Text(
+                            "Diagnostics: ${
+                                processState.summary.diagnostics.takeIf { it.isNotEmpty() }?.joinToString(" | ")
+                                    ?: "None"
+                            }",
+                        )
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
                         onClick = onEnterShoppingMode,

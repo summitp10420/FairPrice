@@ -18,8 +18,22 @@ data class PriceCheck(
     val foundPriceCents: Int,
     @SerialName("strategy_id")
     val strategyId: String? = null,
+    @SerialName("strategy_name")
+    val strategyName: String? = null,
     @SerialName("extraction_successful")
     val extractionSuccessful: Boolean,
+    @SerialName("attempted_configs")
+    val attemptedConfigs: List<String>? = null,
+    @SerialName("final_config")
+    val finalConfig: String? = null,
+    @SerialName("retry_count")
+    val retryCount: Int = 0,
+    val outcome: String? = null,
+    val degraded: Boolean? = null,
+    @SerialName("baseline_success")
+    val baselineSuccess: Boolean? = null,
+    @SerialName("spoof_success")
+    val spoofSuccess: Boolean? = null,
     @SerialName("raw_extraction_data")
     val rawExtractionData: JsonObject,
     @SerialName("created_at")

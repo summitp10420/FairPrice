@@ -3,6 +3,7 @@ package com.fairprice.app.viewmodel
 import android.content.Intent
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
+import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
@@ -82,7 +83,7 @@ class HomeViewModelTest {
         assertEquals(0, vpnEngine.connectCalls)
         assertEquals(0, vpnEngine.disconnectCalls)
         assertEquals(1, extractionEngine.loadCalls)
-        assertEquals(0, repository.logCalls)
+        assertEquals(1, repository.logCalls)
 
         val processState = viewModel.uiState.value.processState
         assertTrue(processState is HomeProcessState.Error)
@@ -155,6 +156,81 @@ class HomeViewModelTest {
         assertEquals(listOf("cookie_tracking"), summary.tactics)
         assertEquals("Default Strategy (stub)", summary.strategyName)
         assertEquals("wg-test-config", summary.vpnConfig)
+        assertEquals(listOf("wg-test-config"), summary.attemptedConfigs)
+        assertEquals("wg-test-config", summary.finalConfig)
+        assertEquals(0, summary.retryCount)
+        assertEquals("success", summary.outcome)
+        assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
+        assertEquals(
+            listOf("https://example.com/p/123", "https://example.com/p/123"),
+            extractionEngine.loadedUrls,
+        )
+    }
+
+    @Test
+    fun shortAmazonUrl_resolutionSuccess_usesCanonicalUrlAcrossFlow() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2599, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val canonicalUrl = "https://www.amazon.com/dp/B0TEST1234"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shortUrlResolver = { canonicalUrl },
+        )
+
+        viewModel.onUrlInputChanged("https://a.co/d/01Ral6wt")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(canonicalUrl, strategyEngine.lastUrl)
+        assertEquals(listOf(canonicalUrl, canonicalUrl), extractionEngine.loadedUrls)
+        assertEquals(canonicalUrl, repository.lastLoggedPriceCheck?.productUrl)
+    }
+
+    @Test
+    fun shortAmazonUrl_resolutionFailure_fallsBackToOriginalUrl() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2599, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val originalShortUrl = "https://a.co/d/01Ral6wt"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shortUrlResolver = { null },
+        )
+
+        viewModel.onUrlInputChanged(originalShortUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(originalShortUrl, strategyEngine.lastUrl)
+        assertEquals(listOf(originalShortUrl, originalShortUrl), extractionEngine.loadedUrls)
+        assertEquals(originalShortUrl, repository.lastLoggedPriceCheck?.productUrl)
     }
 
     @Test
@@ -347,7 +423,7 @@ class HomeViewModelTest {
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(1, vpnEngine.connectCalls)
+        assertEquals(2, vpnEngine.connectCalls)
         assertEquals(1, vpnEngine.disconnectCalls)
         assertTrue(!viewModel.uiState.value.showBrowser)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
@@ -414,7 +490,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(3, extractionEngine.loadCalls)
-        assertEquals(0, repository.logCalls)
+        assertEquals(1, repository.logCalls)
         assertEquals(1, vpnEngine.disconnectCalls)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Error)
     }
@@ -598,7 +674,7 @@ class HomeViewModelTest {
         assertEquals(1, extractionEngine.loadCalls)
         assertEquals(1, strategyEngine.determineCalls)
         assertEquals(1, vpnEngine.connectCalls)
-        assertEquals(0, repository.logCalls)
+        assertEquals(1, repository.logCalls)
         assertTrue(viewModel.uiState.value.showBrowser)
         val processState = viewModel.uiState.value.processState
         assertTrue(processState is HomeProcessState.Error)
@@ -610,12 +686,14 @@ class HomeViewModelTest {
     ) : PricingStrategyEngine {
         var determineCalls: Int = 0
         var lastBaselineTactics: List<String> = emptyList()
+        var lastUrl: String? = null
 
         override suspend fun determineStrategy(
             url: String,
             baselineTactics: List<String>,
         ): Result<StrategyResult> {
             determineCalls += 1
+            lastUrl = url
             lastBaselineTactics = baselineTactics
             return result
         }
@@ -652,9 +730,11 @@ class HomeViewModelTest {
         private val sessionState = MutableStateFlow<GeckoSession?>(null)
         override val currentSession: StateFlow<GeckoSession?> = sessionState
         var loadCalls: Int = 0
+        val loadedUrls: MutableList<String> = mutableListOf()
 
         override suspend fun loadAndExtract(url: String): Result<ExtractionResult> {
             loadCalls += 1
+            loadedUrls += url
             return if (extractionResults.isEmpty()) {
                 Result.failure(IllegalStateException("No extraction result configured"))
             } else {
@@ -672,6 +752,13 @@ class HomeViewModelTest {
             logCalls += 1
             lastLoggedPriceCheck = priceCheck
             return logResult
+        }
+
+        override suspend fun logPriceCheckRun(
+            priceCheck: PriceCheck,
+            attempts: List<PriceCheckAttempt>,
+        ): Result<Unit> {
+            return logPriceCheck(priceCheck)
         }
     }
 }

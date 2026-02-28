@@ -29,6 +29,7 @@ interface ExtractionEngine {
 data class ExtractionResult(
     val priceCents: Int,
     val tactics: List<String>,
+    val debugExtractionPath: String? = null,
 )
 
 class GeckoExtractionEngine(context: Context) : ExtractionEngine {
@@ -210,6 +211,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                     ExtractionResult(
                         priceCents = payload.priceCents,
                         tactics = payload.detectedTactics,
+                        debugExtractionPath = payload.debugExtractionPath,
                     ),
                 )
             }
@@ -245,6 +247,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                     type = type,
                     priceCents = priceCents,
                     detectedTactics = detectedTactics,
+                    debugExtractionPath = message.optString("debugExtractionPath", "").ifBlank { null },
                 )
             }
             is Map<*, *> -> {
@@ -261,6 +264,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                     type = type,
                     priceCents = priceCents,
                     detectedTactics = detectedTactics,
+                    debugExtractionPath = (message["debugExtractionPath"] as? String)?.ifBlank { null },
                 )
             }
             else -> null
@@ -302,6 +306,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         val type: String,
         val priceCents: Int,
         val detectedTactics: List<String>,
+        val debugExtractionPath: String? = null,
     )
 
     private companion object {
