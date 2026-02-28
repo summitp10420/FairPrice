@@ -154,6 +154,7 @@ class HomeViewModelTest {
         assertEquals("$12.99", summary.spoofedPrice)
         assertEquals(listOf("cookie_tracking"), summary.tactics)
         assertEquals("Default Strategy (stub)", summary.strategyName)
+        assertEquals("wg-test-config", summary.vpnConfig)
     }
 
     @Test
@@ -192,7 +193,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun closeShoppingSession_disconnectsVpnAndResetsState() = runTest(dispatcher) {
+    fun closeShoppingSession_revertsToBaselineAndResetsState() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
         val extractionEngine = FakeExtractionEngine(
@@ -224,9 +225,49 @@ class HomeViewModelTest {
         viewModel.onCloseShoppingSession()
         advanceUntilIdle()
 
-        assertEquals(1, vpnEngine.disconnectCalls)
+        assertEquals(2, vpnEngine.connectCalls)
+        assertEquals("baseline_saltlake_ut-US-UT-137.conf", vpnEngine.lastConnectConfig)
+        assertEquals(0, vpnEngine.disconnectCalls)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Idle)
         assertTrue(!viewModel.uiState.value.showBrowser)
+    }
+
+    @Test
+    fun appClosing_revertsToBaselineWhenShoppingVpnIsActive() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+        assertEquals(1, vpnEngine.connectCalls)
+
+        viewModel.onAppClosing()
+        advanceUntilIdle()
+
+        assertEquals(2, vpnEngine.connectCalls)
+        assertEquals("baseline_saltlake_ut-US-UT-137.conf", vpnEngine.lastConnectConfig)
+        assertEquals(0, vpnEngine.disconnectCalls)
     }
 
     @Test

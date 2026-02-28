@@ -42,6 +42,7 @@ data class SummaryData(
     val spoofedPrice: String,
     val tactics: List<String>,
     val strategyName: String,
+    val vpnConfig: String,
 )
 
 data class HomeUiState(
@@ -62,6 +63,7 @@ class HomeViewModel(
         private const val TAG = "HomeViewModel"
         private const val VPN_STABILIZATION_DELAY_MS = 2_000L
         private const val SPOOF_EXTRACTION_MAX_ATTEMPTS = 2
+        private const val BASELINE_VPN_CONFIG = "baseline_saltlake_ut-US-UT-137.conf"
     }
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -70,6 +72,7 @@ class HomeViewModel(
     val vpnPermissionRequests: SharedFlow<Intent> = _vpnPermissionRequests.asSharedFlow()
     private var shoppingVpnActive: Boolean = false
     private var pendingVpnContinuation: PendingVpnContinuation? = null
+    private var activeVpnConfig: String? = null
 
     init {
         viewModelScope.launch {
@@ -201,6 +204,7 @@ class HomeViewModel(
                     return@launch
                 }
                 vpnConnectedThisRun = true
+                activeVpnConfig = strategy.wireguardConfig
                 Log.i(TAG, "VPN connect completed for spoof attempt")
                 awaitSpoofStabilizationGate()
 
@@ -241,6 +245,7 @@ class HomeViewModel(
                 successSummary = buildSuccessSummary(
                     baselineResult = baselineResult,
                     spoofedResult = spoofedResult,
+                    strategy = strategy,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -305,6 +310,7 @@ class HomeViewModel(
                     return@launch
                 }
                 vpnConnectedThisRun = true
+                activeVpnConfig = pending.strategy.wireguardConfig
                 Log.i(TAG, "VPN connect completed for spoof attempt after permission grant")
                 awaitSpoofStabilizationGate()
 
@@ -340,6 +346,7 @@ class HomeViewModel(
                 successSummary = buildSuccessSummary(
                     baselineResult = pending.baselineResult,
                     spoofedResult = spoofedResult,
+                    strategy = pending.strategy,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -382,15 +389,11 @@ class HomeViewModel(
     fun onCloseShoppingSession() {
         viewModelScope.launch {
             var terminalError: String? = null
-            if (shoppingVpnActive) {
-                val disconnectResult = vpnEngine.disconnect()
-                if (disconnectResult.isFailure) {
-                    val throwable = disconnectResult.exceptionOrNull()
-                    terminalError = "VPN disconnect failed: ${throwable.toUserMessage()}"
-                    Log.e("HomeViewModel", "VPN disconnect failed on close", throwable)
-                } else {
-                    shoppingVpnActive = false
-                }
+            val baselineError = ensureBaselineVpnActive()
+            if (baselineError != null) {
+                terminalError = baselineError
+            } else {
+                shoppingVpnActive = false
             }
 
             _uiState.update { current ->
@@ -401,6 +404,17 @@ class HomeViewModel(
                     processState = terminalError?.let { HomeProcessState.Error(it) }
                         ?: HomeProcessState.Idle,
                 )
+            }
+        }
+    }
+
+    fun onAppClosing() {
+        viewModelScope.launch {
+            val baselineError = ensureBaselineVpnActive()
+            if (baselineError != null) {
+                Log.e(TAG, baselineError)
+            } else {
+                shoppingVpnActive = false
             }
         }
     }
@@ -482,6 +496,22 @@ class HomeViewModel(
         return throwable.message ?: throwable::class.java.simpleName
     }
 
+    private suspend fun ensureBaselineVpnActive(): String? {
+        if (activeVpnConfig == BASELINE_VPN_CONFIG) {
+            Log.i(TAG, "Baseline VPN already active; skipping reconnect.")
+            return null
+        }
+        val connectResult = vpnEngine.connect(BASELINE_VPN_CONFIG)
+        if (connectResult.isFailure) {
+            val throwable = connectResult.exceptionOrNull()
+            Log.e(TAG, "Failed to revert VPN to baseline config", throwable)
+            return "Failed to revert VPN to baseline: ${throwable.toUserMessage()}"
+        }
+        activeVpnConfig = BASELINE_VPN_CONFIG
+        Log.i(TAG, "Reverted VPN to baseline config: $BASELINE_VPN_CONFIG")
+        return null
+    }
+
     private fun Throwable?.isLikelyGeckoLifecycleChurn(): Boolean {
         val throwable = this ?: return false
         if (throwable is TimeoutCancellationException) {
@@ -500,6 +530,7 @@ class HomeViewModel(
     private fun buildSuccessSummary(
         baselineResult: ExtractionResult,
         spoofedResult: ExtractionResult,
+        strategy: StrategyResult,
     ): SummaryData {
         val baseline = formatUsd(baselineResult.priceCents)
         val spoofed = formatUsd(spoofedResult.priceCents)
@@ -508,6 +539,7 @@ class HomeViewModel(
             spoofedPrice = spoofed,
             tactics = baselineResult.tactics,
             strategyName = "Default Strategy (stub)",
+            vpnConfig = strategy.wireguardConfig,
         )
     }
 

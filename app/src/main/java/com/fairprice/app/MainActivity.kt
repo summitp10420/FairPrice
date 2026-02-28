@@ -103,6 +103,13 @@ class MainActivity : ComponentActivity() {
         handleSendIntent(intent)
     }
 
+    override fun onDestroy() {
+        if (isFinishing) {
+            homeViewModel.onAppClosing()
+        }
+        super.onDestroy()
+    }
+
     private fun handleSendIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
