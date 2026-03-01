@@ -161,6 +161,16 @@ class SecureVpnConfigStore(
             val index = current.indexOfFirst { it.id == configId }
             if (index == -1) error("User VPN config not found: $configId")
             val existing = current[index]
+            val baselineId = getBaselineConfigId()
+            if (!enabled && baselineId == configId) {
+                error("Cannot disable baseline VPN config. Set another baseline first.")
+            }
+            if (!enabled) {
+                val currentlyEnabled = current.count { it.enabled }
+                if (existing.enabled && currentlyEnabled <= 1) {
+                    error("At least one imported VPN config must stay enabled.")
+                }
+            }
             current[index] = existing.copy(enabled = enabled)
             writeMetadata(current)
         }
@@ -172,6 +182,19 @@ class SecureVpnConfigStore(
 
     override fun setBaselineConfigId(configId: String): Result<Unit> {
         return runCatching {
+            if (configId.startsWith(USER_ID_PREFIX)) {
+                val current = readMetadata().toMutableList()
+                val index = current.indexOfFirst { it.id == configId }
+                if (index == -1) {
+                    error("Cannot set baseline. Imported VPN config not found: $configId")
+                }
+                val existing = current[index]
+                if (!existing.enabled) {
+                    // Baseline must be routable by policy; auto-enable to keep Done/App-close reliable.
+                    current[index] = existing.copy(enabled = true)
+                    writeMetadata(current)
+                }
+            }
             prefs.edit().putString(PREF_BASELINE_ID, configId).apply()
         }
     }

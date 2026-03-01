@@ -13,6 +13,10 @@ data class PriceCheckAttempt(
     val attemptIndex: Int,
     @SerialName("vpn_config")
     val vpnConfig: String? = null,
+    @SerialName("vpn_config_source")
+    val vpnConfigSource: String? = null,
+    @SerialName("vpn_config_provider")
+    val vpnConfigProvider: String? = null,
     val success: Boolean,
     @SerialName("error_type")
     val errorType: String? = null,

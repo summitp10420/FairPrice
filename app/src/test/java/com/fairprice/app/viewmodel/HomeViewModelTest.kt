@@ -838,6 +838,7 @@ class HomeViewModelTest {
         var logCalls: Int = 0
         var lastLoggedPriceCheck: PriceCheck? = null
         var logResult: Result<Unit> = Result.success(Unit)
+        var lifetimeSavingsCents: Int = 0
 
         override suspend fun logPriceCheck(priceCheck: PriceCheck): Result<Unit> {
             logCalls += 1
@@ -850,6 +851,10 @@ class HomeViewModelTest {
             attempts: List<PriceCheckAttempt>,
         ): Result<Unit> {
             return logPriceCheck(priceCheck)
+        }
+
+        override suspend fun fetchLifetimePotentialSavingsCents(): Result<Int> {
+            return Result.success(lifetimeSavingsCents)
         }
     }
 }

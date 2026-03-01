@@ -11,10 +11,13 @@ import io.github.jan.supabase.postgrest.postgrest
 import java.io.IOException
 import kotlin.random.Random
 import kotlinx.coroutines.delay
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
 interface FairPriceRepository {
     suspend fun logPriceCheck(priceCheck: PriceCheck): Result<Unit>
     suspend fun logPriceCheckRun(priceCheck: PriceCheck, attempts: List<PriceCheckAttempt>): Result<Unit>
+    suspend fun fetchLifetimePotentialSavingsCents(): Result<Int>
 }
 
 class FairPriceRepositoryImpl(
@@ -37,6 +40,21 @@ class FairPriceRepositoryImpl(
                 insertAttemptsWithRetry(attempts)
             }
             Unit
+        }
+    }
+
+    override suspend fun fetchLifetimePotentialSavingsCents(): Result<Int> {
+        return runCatching {
+            ensureAuthenticatedSession()
+            val rows = supabaseClient.postgrest["price_checks"]
+                .select()
+                .decodeList<PriceCheckSavingsRow>()
+
+            rows.sumOf { row ->
+                val dirtyBaseline = row.dirtyBaselinePriceCents ?: return@sumOf 0
+                val found = row.foundPriceCents ?: return@sumOf 0
+                (dirtyBaseline - found).coerceAtLeast(0)
+            }
         }
     }
 
@@ -108,6 +126,8 @@ class FairPriceRepositoryImpl(
             strategyName = null,
             attemptedConfigs = null,
             finalConfig = null,
+            finalConfigSource = null,
+            finalConfigProvider = null,
             retryCount = 0,
             outcome = null,
             degraded = null,
@@ -120,4 +140,12 @@ class FairPriceRepositoryImpl(
     private fun Throwable.isTransientNetworkFailure(): Boolean {
         return this is IOException || this is HttpRequestException
     }
+
+    @Serializable
+    private data class PriceCheckSavingsRow(
+        @SerialName("dirty_baseline_price_cents")
+        val dirtyBaselinePriceCents: Int? = null,
+        @SerialName("found_price_cents")
+        val foundPriceCents: Int? = null,
+    )
 }

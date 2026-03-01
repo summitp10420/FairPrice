@@ -26,6 +26,10 @@ data class PriceCheck(
     val attemptedConfigs: List<String>? = null,
     @SerialName("final_config")
     val finalConfig: String? = null,
+    @SerialName("final_config_source")
+    val finalConfigSource: String? = null,
+    @SerialName("final_config_provider")
+    val finalConfigProvider: String? = null,
     @SerialName("retry_count")
     val retryCount: Int = 0,
     val outcome: String? = null,

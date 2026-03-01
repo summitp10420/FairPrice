@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
@@ -44,6 +46,11 @@ import com.fairprice.app.viewmodel.HomeProcessState
 import com.fairprice.app.viewmodel.HomeUiState
 import kotlin.math.roundToInt
 import org.mozilla.geckoview.GeckoView
+
+private enum class HomePrimaryPane {
+    PRICE_CHECK,
+    CONFIG_MANAGEMENT,
+}
 
 @Composable
 fun HomeScreen(
@@ -71,11 +78,32 @@ fun HomeScreen(
         var backButtonOffsetX by remember { mutableFloatStateOf(0f) }
         var backButtonOffsetY by remember { mutableFloatStateOf(0f) }
         val keyboardController = LocalSoftwareKeyboardController.current
+        var activePane by remember { mutableStateOf(HomePrimaryPane.PRICE_CHECK) }
 
         Column(
             modifier = Modifier.fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.Top,
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = { activePane = HomePrimaryPane.PRICE_CHECK },
+                    modifier = Modifier.weight(1f),
+                    enabled = activePane != HomePrimaryPane.PRICE_CHECK,
+                ) {
+                    Text("Price Check")
+                }
+                OutlinedButton(
+                    onClick = { activePane = HomePrimaryPane.CONFIG_MANAGEMENT },
+                    modifier = Modifier.weight(1f),
+                    enabled = activePane != HomePrimaryPane.CONFIG_MANAGEMENT,
+                ) {
+                    Text("Manage VPN")
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = formatRawCentsAsCurrency(uiState.dirtyBaselineInputRaw),
                 onValueChange = onDirtyBaselineChanged,
@@ -105,13 +133,23 @@ fun HomeScreen(
                 Text("Check Price")
             }
             Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = onImportVpnConfigClicked,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Import VPN .conf")
+            Spacer(modifier = Modifier.height(8.dp))
+            if (activePane == HomePrimaryPane.PRICE_CHECK) {
+                OutlinedButton(
+                    onClick = onCloseShoppingSession,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Done")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onImportVpnConfigClicked,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Import VPN .conf")
+                }
             }
-            if (uiState.userVpnConfigs.isNotEmpty()) {
+            if (activePane == HomePrimaryPane.CONFIG_MANAGEMENT && uiState.userVpnConfigs.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "Manage Imported VPN Configs",
@@ -174,87 +212,83 @@ fun HomeScreen(
                     }
                 }
             }
-            when (val processState = uiState.processState) {
-                is HomeProcessState.Idle -> Unit
-                is HomeProcessState.Processing -> {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = processState.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                }
-                is HomeProcessState.Success -> {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Column(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
+            if (activePane == HomePrimaryPane.PRICE_CHECK) {
+                when (val processState = uiState.processState) {
+                    is HomeProcessState.Idle -> Unit
+                    is HomeProcessState.Processing -> {
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Summary",
+                            text = processState.message,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Baseline Price: ${processState.summary.baselinePrice}")
-                        Text("Spoofed Price: ${processState.summary.spoofedPrice}")
-                        Text(
-                            "Retailer Tactics Detected: ${
-                                processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
-                                    ?: "None"
-                            }",
-                        )
-                        processState.summary.dirtyBaselinePrice?.let {
-                            Text("Price You See (Manual): $it")
-                        } ?: Text("Price You See (Manual): Skipped")
-                        if (processState.summary.isVictory) {
-                            Text(
-                                text = "We beat them! Potential Savings: ${processState.summary.potentialSavings}",
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Text("Strategy Deployed: ${processState.summary.strategyName}")
-                        Text("VPN Config Loaded: ${processState.summary.vpnConfig}")
-                        Text(
-                            "Attempted Config Chain: ${
-                                processState.summary.attemptedConfigs.takeIf { it.isNotEmpty() }?.joinToString(" -> ")
-                                    ?: "None"
-                            }",
-                        )
-                        Text("Final Config: ${processState.summary.finalConfig}")
-                        Text("Retry Count: ${processState.summary.retryCount}")
-                        Text("Outcome: ${processState.summary.outcome}")
-                        Text(
-                            "Diagnostics: ${
-                                processState.summary.diagnostics.takeIf { it.isNotEmpty() }?.joinToString(" | ")
-                                    ?: "None"
-                            }",
+                            color = MaterialTheme.colorScheme.secondary,
                         )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    is HomeProcessState.Success -> {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            if (processState.summary.isVictory) {
+                                Text(
+                                    text = "We beat them! Potential Savings: ${processState.summary.potentialSavings}",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            } else {
+                                Text(
+                                    text = "Potential Savings This Run: $0.00",
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            Text("Lifetime potential savings: ${processState.summary.lifetimePotentialSavings}")
+                            Text("Outcome: ${processState.summary.outcome}")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Price Check Summary",
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            processState.summary.dirtyBaselinePrice?.let {
+                                Text("Baseline Price: $it")
+                            } ?: Text("Baseline Price: Skipped")
+                            Text("Clean Session Control: ${processState.summary.baselinePrice}")
+                            Text("Spoofed Price: ${processState.summary.spoofedPrice}")
+                            Text(
+                                "Retailer Tactics Detected: ${
+                                    processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                                        ?: "None"
+                                }",
+                            )
+                            Text("Strategy Used: ${processState.summary.strategyName}")
+                            Text("Baseline Config: ${processState.summary.baselineConfig}")
+                            Text("Attempted Config: ${processState.summary.attemptedConfigs.joinToString(" -> ").ifBlank { "None" }}")
+                            Text("Final Config: ${processState.summary.finalConfig}")
+                            Text("Retry Count: ${processState.summary.retryCount}")
+                            Text(
+                                "Diagnostics: ${
+                                    processState.summary.diagnostics.takeIf { it.isNotEmpty() }?.joinToString(" | ")
+                                        ?: "None"
+                                }",
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = onEnterShoppingMode,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("Proceed to Shopping View")
                         }
-                        OutlinedButton(
-                            onClick = onCloseShoppingSession,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("Done")
-                        }
                     }
-                }
-                is HomeProcessState.Error -> {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = processState.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                    is HomeProcessState.Error -> {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = processState.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }

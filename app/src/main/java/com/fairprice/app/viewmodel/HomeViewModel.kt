@@ -46,6 +46,9 @@ sealed interface HomeProcessState {
 }
 
 data class SummaryData(
+    val lifetimePotentialSavings: String,
+    val baselineConfig: String,
+    val outcome: String,
     val baselinePrice: String,
     val spoofedPrice: String,
     val dirtyBaselinePrice: String?,
@@ -57,7 +60,6 @@ data class SummaryData(
     val attemptedConfigs: List<String>,
     val finalConfig: String,
     val retryCount: Int,
-    val outcome: String,
     val diagnostics: List<String>,
 )
 
@@ -109,6 +111,7 @@ class HomeViewModel(
         private const val SPOOF_ATTEMPT_MAX = 2
         private const val BASELINE_VPN_CONFIG = "baseline_saltlake_ut-US-UT-137.conf"
         private const val DEFAULT_STRATEGY_NAME = "Default Strategy (stub)"
+        private const val USER_CONFIG_PREFIX = "user:"
         private const val URL_RESOLVE_CONNECT_TIMEOUT_MS = 5_000
         private const val URL_RESOLVE_READ_TIMEOUT_MS = 5_000
 
@@ -443,7 +446,11 @@ class HomeViewModel(
                 }
 
                 if (spoofedResult == null) {
-                    terminalError = terminalError ?: "Spoofed extraction failed after bounded retry."
+                    terminalError = terminalError ?: when {
+                        diagnostics.any { it.contains("Secure tunnel unavailable", ignoreCase = true) } ->
+                            "Spoofed extraction failed after bounded retry. Secure tunnel unavailable; reconnect VPN and retry."
+                        else -> "Spoofed extraction failed after bounded retry."
+                    }
                     val failedPriceCheck = buildPriceCheck(
                         url = submittedUrl,
                         strategyId = strategy.strategyId,
@@ -500,16 +507,18 @@ class HomeViewModel(
                 }
 
                 Log.i("HomeViewModel", "price_checks insert succeeded")
+                val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
+                    .getOrDefault(0)
                 successSummary = buildSuccessSummary(
                     baselineResult = baselineExtraction,
                     spoofedResult = spoofedResult,
                     dirtyBaselinePriceCents = dirtyBaselinePriceCents,
-                    strategy = strategy,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: strategy.wireguardConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
                     outcome = "success",
                     diagnostics = diagnostics,
+                    lifetimePotentialSavingsCents = lifetimeSavingsCents,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -682,7 +691,11 @@ class HomeViewModel(
                 }
 
                 if (spoofedResult == null) {
-                    terminalError = terminalError ?: "Spoofed extraction failed after bounded retry."
+                    terminalError = terminalError ?: when {
+                        diagnostics.any { it.contains("Secure tunnel unavailable", ignoreCase = true) } ->
+                            "Spoofed extraction failed after bounded retry. Secure tunnel unavailable; reconnect VPN and retry."
+                        else -> "Spoofed extraction failed after bounded retry."
+                    }
                     val failedPriceCheck = buildPriceCheck(
                         url = pending.submittedUrl,
                         strategyId = pending.strategy.strategyId,
@@ -735,16 +748,18 @@ class HomeViewModel(
                     return@launch
                 }
 
+                val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
+                    .getOrDefault(0)
                 successSummary = buildSuccessSummary(
                     baselineResult = pending.baselineResult,
                     spoofedResult = spoofedResult,
                     dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
-                    strategy = pending.strategy,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: pending.waitingConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
                     outcome = "success",
                     diagnostics = diagnostics,
+                    lifetimePotentialSavingsCents = lifetimeSavingsCents,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -862,6 +877,7 @@ class HomeViewModel(
         var connected = false
         var extractionResult: Result<ExtractionResult>? = null
         var permissionIntent: Intent? = null
+        var failureUserMessage: String? = null
         val latencyMs = measureTimeMillis {
             _uiState.update { current ->
                 current.copy(
@@ -876,6 +892,11 @@ class HomeViewModel(
                     return@measureTimeMillis
                 }
                 vpnRotationEngine.reportAttemptResult(config, success = false)
+                failureUserMessage = if (isLikelyVpnConnectivityIssue(throwable)) {
+                    "Secure tunnel unavailable. Verify device VPN is connected, then retry."
+                } else {
+                    "Spoof attempt failed: ${throwable.toUserMessage()}"
+                }
                 extractionResult = Result.failure(throwable ?: IllegalStateException("VPN connect failed"))
                 return@measureTimeMillis
             }
@@ -913,7 +934,7 @@ class HomeViewModel(
         return SpoofAttemptExecution.Failure(
             throwable = throwable,
             connected = connected,
-            userMessage = "Spoof attempt failed: ${throwable.toUserMessage()}",
+            userMessage = failureUserMessage ?: "Spoof attempt failed: ${throwable.toUserMessage()}",
             latencyMs = latencyMs,
         )
     }
@@ -947,6 +968,8 @@ class HomeViewModel(
             extractionSuccessful = extractionSuccessful,
             attemptedConfigs = attemptedConfigs,
             finalConfig = finalConfig,
+            finalConfigSource = resolveConfigSource(finalConfig),
+            finalConfigProvider = resolveConfigProvider(finalConfig),
             retryCount = retryCount,
             outcome = outcome,
             degraded = degraded,
@@ -979,6 +1002,8 @@ class HomeViewModel(
             phase = phase,
             attemptIndex = attemptIndex,
             vpnConfig = vpnConfig,
+            vpnConfigSource = resolveConfigSource(vpnConfig),
+            vpnConfigProvider = resolveConfigProvider(vpnConfig),
             success = success,
             errorType = throwable?.javaClass?.simpleName,
             errorMessage = throwable?.message,
@@ -997,6 +1022,16 @@ class HomeViewModel(
     private fun Throwable?.toUserMessage(): String {
         val throwable = this ?: return "Unknown error"
         return throwable.message ?: throwable::class.java.simpleName
+    }
+
+    private fun isLikelyVpnConnectivityIssue(throwable: Throwable?): Boolean {
+        val message = throwable?.message?.lowercase(Locale.US).orEmpty()
+        if (message.contains("internet route is not ready")) return true
+        if (message.contains("network is unreachable")) return true
+        if (message.contains("timed out")) return true
+        if (message.contains("uapi")) return true
+        if (message.contains("backend")) return true
+        return false
     }
 
     private suspend fun ensureBaselineVpnActive(): String? {
@@ -1018,6 +1053,33 @@ class HomeViewModel(
         return BASELINE_VPN_CONFIG
     }
 
+    private fun resolveConfigSource(configId: String?): String? {
+        if (configId.isNullOrBlank()) return null
+        return if (configId.startsWith(USER_CONFIG_PREFIX)) "user" else "asset"
+    }
+
+    private fun resolveConfigProvider(configId: String?): String? {
+        if (configId.isNullOrBlank()) return null
+        if (configId.startsWith(USER_CONFIG_PREFIX)) {
+            return vpnConfigStore.listUserConfigs()
+                .firstOrNull { it.id == configId }
+                ?.providerHint
+                ?: "unknown"
+        }
+        return inferProviderFromAssetConfigName(configId)
+    }
+
+    private fun inferProviderFromAssetConfigName(configName: String): String {
+        val normalized = configName.lowercase(Locale.US)
+        return when {
+            "proton" in normalized -> "proton"
+            "surfshark" in normalized -> "surfshark"
+            "mullvad" in normalized -> "mullvad"
+            "nord" in normalized -> "nordvpn"
+            else -> "asset"
+        }
+    }
+
     private fun refreshVpnConfigs() {
         val configs = vpnConfigStore.listUserConfigs()
         val baseline = vpnConfigStore.getBaselineConfigId()
@@ -1037,18 +1099,24 @@ class HomeViewModel(
         baselineResult: ExtractionResult,
         spoofedResult: ExtractionResult,
         dirtyBaselinePriceCents: Int?,
-        strategy: StrategyResult,
         attemptedConfigs: List<String>,
         finalConfig: String,
         retryCount: Int,
         outcome: String,
         diagnostics: List<String>,
+        lifetimePotentialSavingsCents: Int,
     ): SummaryData {
         val baseline = formatUsd(baselineResult.priceCents)
         val spoofed = formatUsd(spoofedResult.priceCents)
         val potentialSavingsCents = dirtyBaselinePriceCents?.minus(spoofedResult.priceCents)
         val isVictory = (potentialSavingsCents ?: 0) > 0
+        val deployedConfigDisplay = displayConfigLabel(finalConfig)
+        val attemptedDisplay = attemptedConfigs.map(::displayConfigLabel)
+        val finalDisplay = displayConfigLabel(finalConfig)
         return SummaryData(
+            lifetimePotentialSavings = formatUsd(lifetimePotentialSavingsCents),
+            baselineConfig = displayConfigLabel(resolveBaselineConfigId()),
+            outcome = outcome,
             baselinePrice = baseline,
             spoofedPrice = spoofed,
             dirtyBaselinePrice = dirtyBaselinePriceCents?.let(::formatUsd),
@@ -1056,11 +1124,10 @@ class HomeViewModel(
             isVictory = isVictory,
             tactics = baselineResult.tactics,
             strategyName = DEFAULT_STRATEGY_NAME,
-            vpnConfig = strategy.wireguardConfig,
-            attemptedConfigs = attemptedConfigs,
-            finalConfig = finalConfig,
+            vpnConfig = deployedConfigDisplay,
+            attemptedConfigs = attemptedDisplay,
+            finalConfig = finalDisplay,
             retryCount = retryCount,
-            outcome = outcome,
             diagnostics = diagnostics,
         )
     }
@@ -1104,5 +1171,20 @@ class HomeViewModel(
         val normalized = sanitizeDigitsOnly(raw)
         if (normalized.isBlank()) return null
         return normalized.toIntOrNull()
+    }
+
+    private fun displayConfigLabel(configId: String): String {
+        if (configId.startsWith(USER_CONFIG_PREFIX)) {
+            val importedDisplayName = vpnConfigStore.listUserConfigs()
+                .firstOrNull { it.id == configId }
+                ?.displayName
+                ?: configId
+            return trimConfSuffix(importedDisplayName)
+        }
+        return trimConfSuffix(configId)
+    }
+
+    private fun trimConfSuffix(value: String): String {
+        return value.removeSuffix(".conf").trim()
     }
 }
