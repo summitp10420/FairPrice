@@ -99,3 +99,12 @@ Graceful Degradation: If a price cannot be extracted automatically, the applicat
 UI State Integrity: All ViewModels must represent their state using a Kotlin sealed interface (e.g., Idle, Processing, Success, Error) to prevent impossible overlapping states.
 
 Database Security: All database interactions must be authenticated. The repository must ensure a valid Supabase session (via Anonymous Auth or user login) before executing inserts, and must implement retry logic to survive VPN network toggles.
+
+6. Strategy Lever Governance
+Strategy evolution should be tracked in a dedicated lever catalog so policy changes remain explicit and testable across phases.
+
+Canonical strategy lever document:
+- `DOCS/STRATEGY_LEVERS.MD`
+
+Maintenance rule:
+- Any new strategy behavior (rotation, config management, extraction pathing, retry/cooldown, telemetry dimensions) must update `DOCS/STRATEGY_LEVERS.MD` in the same phase.

@@ -20,8 +20,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,6 +51,9 @@ fun HomeScreen(
     onDirtyBaselineChanged: (String) -> Unit,
     onUrlChanged: (String) -> Unit,
     onCheckPriceClicked: () -> Unit,
+    onImportVpnConfigClicked: () -> Unit,
+    onSetBaselineConfigClicked: (String) -> Unit,
+    onToggleUserConfigEnabled: (String, Boolean) -> Unit,
     onEnterShoppingMode: () -> Unit,
     onBackToApp: () -> Unit,
     onCloseShoppingSession: () -> Unit,
@@ -98,6 +103,76 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Check Price")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onImportVpnConfigClicked,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Import VPN .conf")
+            }
+            if (uiState.userVpnConfigs.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Manage Imported VPN Configs",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    uiState.userVpnConfigs.forEachIndexed { index, config ->
+                        val isBaseline = uiState.baselineConfigId == config.id
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(config.displayName, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        text = "Id: ${config.id}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.secondary,
+                                    )
+                                    Text(
+                                        text = "Provider: ${config.providerHint ?: "unknown"}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.secondary,
+                                    )
+                                }
+                                Switch(
+                                    checked = config.enabled,
+                                    onCheckedChange = { checked ->
+                                        onToggleUserConfigEnabled(config.id, checked)
+                                    },
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (isBaseline) {
+                                    OutlinedButton(onClick = {}, enabled = false) {
+                                        Text("Baseline")
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { onSetBaselineConfigClicked(config.id) },
+                                    ) {
+                                        Text("Set Baseline")
+                                    }
+                                }
+                            }
+                            if (index < uiState.userVpnConfigs.lastIndex) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
             }
             when (val processState = uiState.processState) {
                 is HomeProcessState.Idle -> Unit

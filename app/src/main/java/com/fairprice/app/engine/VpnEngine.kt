@@ -20,7 +20,10 @@ interface VpnEngine {
 
 class VpnPermissionRequiredException(val intent: Intent) : Exception("VPN Permission Required")
 
-class WireguardVpnEngine(private val context: Context) : VpnEngine {
+class WireguardVpnEngine(
+    private val context: Context,
+    private val vpnConfigStore: VpnConfigStore? = null,
+) : VpnEngine {
     private val backend: Backend by lazy { GoBackend(context) }
     private var currentTunnel: WgTunnel? = null
 
@@ -32,8 +35,9 @@ class WireguardVpnEngine(private val context: Context) : VpnEngine {
                     throw VpnPermissionRequiredException(permissionIntent)
                 }
 
-                val parsedConfig = context.assets.open("vpn/$configStr").bufferedReader().use { reader ->
-                    Config.parse(reader)
+                val configText = resolveConfigText(configStr)
+                val parsedConfig = configText.byteInputStream().use { input ->
+                    Config.parse(input)
                 }
                 val tunnel = currentTunnel ?: WgTunnel("fairprice").also { currentTunnel = it }
                 backend.setState(tunnel, Tunnel.State.UP, parsedConfig)
@@ -94,7 +98,18 @@ class WireguardVpnEngine(private val context: Context) : VpnEngine {
         }
     }
 
+    private fun resolveConfigText(configId: String): String {
+        if (configId.startsWith(USER_CONFIG_PREFIX)) {
+            val store = vpnConfigStore ?: error("User VPN config support is not configured.")
+            return store.readUserConfigText(configId).getOrElse { throwable ->
+                throw IllegalStateException("Failed to load imported VPN config.", throwable)
+            }
+        }
+        return context.assets.open("vpn/$configId").bufferedReader().use { it.readText() }
+    }
+
     private companion object {
+        private const val USER_CONFIG_PREFIX = "user:"
         private const val READINESS_PROBE_URL = "https://www.gstatic.com/generate_204"
         private const val READINESS_CONNECT_TIMEOUT_MS = 1500
         private const val READINESS_READ_TIMEOUT_MS = 1500

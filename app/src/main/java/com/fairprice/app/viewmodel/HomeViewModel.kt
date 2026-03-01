@@ -12,6 +12,8 @@ import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
+import com.fairprice.app.engine.VpnConfigRecord
+import com.fairprice.app.engine.VpnConfigStore
 import com.fairprice.app.engine.VpnRotationEngine
 import com.fairprice.app.engine.VpnPermissionRequiredException
 import java.net.HttpURLConnection
@@ -66,11 +68,28 @@ data class HomeUiState(
     val processState: HomeProcessState = HomeProcessState.Idle,
     val activeSession: GeckoSession? = null,
     val showBrowser: Boolean = false,
+    val userVpnConfigs: List<VpnConfigRecord> = emptyList(),
+    val baselineConfigId: String? = null,
 )
 
 class HomeViewModel(
     private val repository: FairPriceRepository,
     private val vpnEngine: VpnEngine,
+    private val vpnConfigStore: VpnConfigStore = object : VpnConfigStore {
+        override fun listUserConfigs() = emptyList<com.fairprice.app.engine.VpnConfigRecord>()
+        override fun listEnabledUserConfigs() = emptyList<com.fairprice.app.engine.VpnConfigRecord>()
+        override fun readUserConfigText(configId: String): Result<String> {
+            return Result.failure(IllegalStateException("User VPN config store unavailable."))
+        }
+        override fun importUserConfig(displayName: String, rawConfigText: String) =
+            Result.failure<com.fairprice.app.engine.VpnConfigRecord>(
+                IllegalStateException("User VPN config store unavailable."),
+            )
+        override fun setUserConfigEnabled(configId: String, enabled: Boolean): Result<Unit> =
+            Result.success(Unit)
+        override fun getBaselineConfigId(): String? = null
+        override fun setBaselineConfigId(configId: String): Result<Unit> = Result.success(Unit)
+    },
     private val vpnRotationEngine: VpnRotationEngine = object : VpnRotationEngine {
         override fun availableConfigs(): List<String> = emptyList()
 
@@ -134,6 +153,7 @@ class HomeViewModel(
                 }
             }
         }
+        refreshVpnConfigs()
     }
 
     fun onUrlInputChanged(value: String) {
@@ -156,6 +176,47 @@ class HomeViewModel(
                 current.copy(urlInput = extractedUrl)
             }
         }
+    }
+
+    fun onVpnConfigImportReceived(fileName: String, rawConfigText: String) {
+        val result = vpnConfigStore.importUserConfig(fileName, rawConfigText)
+        if (result.isFailure) {
+            val message = "VPN config import failed: ${result.exceptionOrNull().toUserMessage()}"
+            _uiState.update { current ->
+                current.copy(processState = HomeProcessState.Error(message))
+            }
+            return
+        }
+
+        val imported = result.getOrThrow()
+        _uiState.update { current ->
+            current.copy(
+                processState = HomeProcessState.Processing(
+                    "Imported VPN config: ${imported.displayName}",
+                ),
+            )
+        }
+        refreshVpnConfigs()
+    }
+
+    fun onSetBaselineConfigClicked(configId: String) {
+        val result = vpnConfigStore.setBaselineConfigId(configId)
+        if (result.isFailure) {
+            val message = "Failed to set baseline config: ${result.exceptionOrNull().toUserMessage()}"
+            _uiState.update { current -> current.copy(processState = HomeProcessState.Error(message)) }
+            return
+        }
+        refreshVpnConfigs()
+    }
+
+    fun onToggleUserConfigEnabled(configId: String, enabled: Boolean) {
+        val result = vpnConfigStore.setUserConfigEnabled(configId, enabled)
+        if (result.isFailure) {
+            val message = "Failed to update VPN config: ${result.exceptionOrNull().toUserMessage()}"
+            _uiState.update { current -> current.copy(processState = HomeProcessState.Error(message)) }
+            return
+        }
+        refreshVpnConfigs()
     }
 
     fun onCheckPriceClicked() {
@@ -939,15 +1000,33 @@ class HomeViewModel(
     }
 
     private suspend fun ensureBaselineVpnActive(): String? {
-        val connectResult = vpnEngine.connect(BASELINE_VPN_CONFIG)
+        val baselineId = resolveBaselineConfigId()
+        val connectResult = vpnEngine.connect(baselineId)
         if (connectResult.isFailure) {
             val throwable = connectResult.exceptionOrNull()
             Log.e(TAG, "Failed to revert VPN to baseline config", throwable)
             return "Failed to revert VPN to baseline: ${throwable.toUserMessage()}"
         }
-        activeVpnConfig = BASELINE_VPN_CONFIG
-        Log.i(TAG, "Reverted VPN to baseline config: $BASELINE_VPN_CONFIG")
+        activeVpnConfig = baselineId
+        Log.i(TAG, "Reverted VPN to baseline config: $baselineId")
         return null
+    }
+
+    private fun resolveBaselineConfigId(): String {
+        val baseline = vpnConfigStore.getBaselineConfigId()
+        if (!baseline.isNullOrBlank()) return baseline
+        return BASELINE_VPN_CONFIG
+    }
+
+    private fun refreshVpnConfigs() {
+        val configs = vpnConfigStore.listUserConfigs()
+        val baseline = vpnConfigStore.getBaselineConfigId()
+        _uiState.update { current ->
+            current.copy(
+                userVpnConfigs = configs,
+                baselineConfigId = baseline,
+            )
+        }
     }
 
     private fun formatUsd(cents: Int): String {

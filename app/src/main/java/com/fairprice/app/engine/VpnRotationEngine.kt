@@ -10,24 +10,28 @@ interface VpnRotationEngine {
 
 class AssetVpnRotationEngine(
     context: Context,
+    private val vpnConfigStore: VpnConfigStore? = null,
     private val blockedConfigs: Set<String> = emptySet(),
     private val unhealthyFailureThreshold: Int = 2,
     private val cooldownMs: Long = 10 * 60 * 1000L,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
     discoveredConfigsOverride: List<String>? = null,
 ) : VpnRotationEngine {
-    private val configs: List<String> = (discoveredConfigsOverride ?: discoverConfigs(context))
-        .filterNot { it in blockedConfigs }
-        .sorted()
+    private val staticAssetConfigs: List<String>? = discoveredConfigsOverride
+    private val appContext: Context = context.applicationContext
     private val healthByConfig: MutableMap<String, ConfigHealth> = mutableMapOf()
     private var nextIndex: Int = 0
 
-    override fun availableConfigs(): List<String> = configs
+    override fun availableConfigs(): List<String> = currentConfigs()
 
     @Synchronized
     override fun nextConfig(excludedConfigs: Set<String>): String? {
+        val configs = currentConfigs()
         if (configs.isEmpty()) return null
         val now = nowMs()
+        if (nextIndex >= configs.size) {
+            nextIndex = 0
+        }
         repeat(configs.size) {
             val index = nextIndex
             nextIndex = (nextIndex + 1) % configs.size
@@ -54,6 +58,23 @@ class AssetVpnRotationEngine(
             health.cooldownUntilMs = nowMs() + cooldownMs
             health.consecutiveFailures = 0
         }
+    }
+
+    private fun currentConfigs(): List<String> {
+        val assets = (staticAssetConfigs ?: discoverConfigs(appContext)).sorted()
+        val imported = vpnConfigStore?.listEnabledUserConfigs().orEmpty()
+        val protonImported = imported
+            .filter { it.providerHint?.equals("proton", ignoreCase = true) == true }
+            .map { it.id }
+            .sorted()
+        val otherImported = imported
+            .filterNot { it.providerHint?.equals("proton", ignoreCase = true) == true }
+            .map { it.id }
+            .sorted()
+
+        return (protonImported + otherImported + assets)
+            .distinct()
+            .filterNot { it in blockedConfigs }
     }
 
     private fun discoverConfigs(context: Context): List<String> {
