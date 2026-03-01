@@ -40,6 +40,7 @@ data class ExtractionResult(
 data class ExtractionRequest(
     val cleanSessionRequired: Boolean = false,
     val phase: String = "default",
+    val strictTrackingProtection: Boolean = false,
 )
 
 class CleanSessionPreparationException(message: String, cause: Throwable? = null) :
@@ -75,7 +76,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             "Starting loadAndExtract for URL: $url (phase=${request.phase}, cleanRequired=${request.cleanSessionRequired})",
         )
         val extension = awaitBuiltInExtension()
-        val sessionSwap = createFreshSession()
+        val sessionSwap = createFreshSession(request)
         val session = sessionSwap.newSession
         attachDelegate(extension, session)
         if (request.cleanSessionRequired) {
@@ -199,15 +200,59 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private fun createFreshSession(): SessionSwap {
+    private fun createFreshSession(request: ExtractionRequest): SessionSwap {
         val oldSession = _currentSession.value
         val newSession = GeckoSession().apply { open(runtime) }
+        applyTrackingProtection(newSession, request)
         _currentSession.value = newSession
         Log.i(
             tag,
             "Opened fresh GeckoSession (new=${newSession.hashCode()}, old=${oldSession?.hashCode()})",
         )
         return SessionSwap(newSession = newSession, oldSession = oldSession)
+    }
+
+    private fun applyTrackingProtection(
+        session: GeckoSession,
+        request: ExtractionRequest,
+    ) {
+        if (!request.strictTrackingProtection) {
+            Log.i(tag, "Tracking protection strict mode not requested (phase=${request.phase}).")
+            return
+        }
+
+        val settings = session.settings
+        val useTrackingProtectionApplied = runCatching {
+            val method = settings.javaClass
+                .methods
+                .firstOrNull { candidate ->
+                    candidate.name == "setUseTrackingProtection" &&
+                        candidate.parameterTypes.size == 1 &&
+                        candidate.parameterTypes[0] == java.lang.Boolean.TYPE
+                } ?: return@runCatching false
+            method.invoke(settings, true)
+            true
+        }.getOrDefault(false)
+
+        val strictLevelApplied = runCatching {
+            val settingsClass = settings.javaClass
+            val strictField = settingsClass.fields.firstOrNull {
+                it.name == "ENHANCED_TRACKING_PROTECTION_STRICT"
+            } ?: return@runCatching false
+            val strictValue = strictField.getInt(null)
+            val strictMethod = settingsClass.methods.firstOrNull { method ->
+                method.name == "setEnhancedTrackingProtectionLevel" &&
+                    method.parameterTypes.size == 1 &&
+                    method.parameterTypes[0] == Int::class.javaPrimitiveType
+            } ?: return@runCatching false
+            strictMethod.invoke(settings, strictValue)
+            true
+        }.getOrDefault(false)
+
+        Log.i(
+            tag,
+            "Tracking protection strict requested (phase=${request.phase}, useTPApplied=$useTrackingProtectionApplied, strictLevelApplied=$strictLevelApplied)",
+        )
     }
 
     private fun retireOldSession(oldSession: GeckoSession?) {

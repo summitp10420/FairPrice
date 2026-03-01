@@ -2,9 +2,11 @@
   const NATIVE_CHANNEL = "com.fairprice.extractor";
   const MAX_ATTEMPTS = 60;
   const RETRY_DELAY_MS = 500;
+  const CANVAS_HOOK_SENTINEL = "__fairpriceCanvasHookInstalled";
   let didSend = false;
   let attempts = 0;
   let observer = null;
+  let hardwareFingerprintingDetected = false;
 
   function normalizePriceToCents(value) {
     if (!value) return null;
@@ -127,7 +129,7 @@
   }
 
   function sniffTactics() {
-    const tactics = [];
+    const tactics = new Set();
     const hiddenCanvas = Array.from(document.querySelectorAll("canvas")).some((canvas) => {
       const style = window.getComputedStyle(canvas);
       const width = canvas.width || canvas.clientWidth || 0;
@@ -140,15 +142,46 @@
         height <= 1
       );
     });
-    if (hiddenCanvas) tactics.push("hidden_canvas");
+    if (hiddenCanvas) tactics.add("hidden_canvas");
 
     const cookie = document.cookie.toLowerCase();
     const trackingTokens = ["_fbp", "_ga", "_gid", "adroll", "doubleclick", "trk", "track"];
     if (trackingTokens.some((token) => cookie.includes(token))) {
-      tactics.push("cookie_tracking");
+      tactics.add("cookie_tracking");
     }
 
-    return tactics;
+    const hasSurveillanceMarker =
+      typeof window.FS !== "undefined" ||
+      typeof window._hjSettings !== "undefined" ||
+      typeof window.datadome !== "undefined" ||
+      typeof window.__ddg1_ !== "undefined" ||
+      document.querySelector("script[src*='datadome']") != null;
+    if (hasSurveillanceMarker) {
+      tactics.add("surveillance_active");
+    }
+
+    if (hardwareFingerprintingDetected) {
+      tactics.add("hardware_fingerprinting");
+    }
+
+    return Array.from(tactics);
+  }
+
+  function installCanvasFingerprintObserver() {
+    if (window[CANVAS_HOOK_SENTINEL]) {
+      return;
+    }
+    const prototype = window.HTMLCanvasElement?.prototype;
+    if (!prototype || typeof prototype.toDataURL !== "function") {
+      return;
+    }
+
+    const originalToDataURL = prototype.toDataURL;
+    prototype.toDataURL = function wrappedToDataURL(...args) {
+      hardwareFingerprintingDetected = true;
+      return originalToDataURL.apply(this, args);
+    };
+    window[CANVAS_HOOK_SENTINEL] = true;
   }
 
   function buildPayload() {
@@ -223,6 +256,8 @@
       }
     }, RETRY_DELAY_MS);
   }
+
+  installCanvasFingerprintObserver();
 
   observer = new MutationObserver(() => {
     sendIfReady();

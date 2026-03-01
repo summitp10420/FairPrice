@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -236,6 +237,108 @@ class HomeViewModelTest {
         assertEquals(originalShortUrl, strategyEngine.lastUrl)
         assertEquals(listOf(originalShortUrl, originalShortUrl), extractionEngine.loadedUrls)
         assertEquals(originalShortUrl, repository.lastLoggedPriceCheck?.productUrl)
+    }
+
+    @Test
+    fun spoofPass_sanitizesTrackingParams_andLogsExecutionUrlLeverTelemetry() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2599, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val inputUrl = "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shortUrlResolver = { it },
+        )
+
+        viewModel.onUrlInputChanged(inputUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                inputUrl,
+                "https://example.com/p/123?sku=99#details",
+            ),
+            extractionEngine.loadedUrls,
+        )
+        val attempts = repository.lastLoggedAttempts
+        assertEquals(2, attempts.size)
+        assertEquals(inputUrl, attempts[0].executionUrl)
+        assertEquals(
+            "false",
+            attempts[0].appliedLevers?.jsonObject?.get("url_sanitized")?.jsonPrimitive?.content,
+        )
+        assertEquals("https://example.com/p/123?sku=99#details", attempts[1].executionUrl)
+        assertEquals(
+            "true",
+            attempts[1].appliedLevers?.jsonObject?.get("url_sanitized")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "true",
+            attempts[1].appliedLevers?.jsonObject?.get("amnesia_protocol")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "strict",
+            attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun spoofPass_withoutTrackingParams_logsUrlSanitizedFalse() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2599, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val inputUrl = "https://example.com/p/123?sku=99"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shortUrlResolver = { it },
+        )
+
+        viewModel.onUrlInputChanged(inputUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(listOf(inputUrl, inputUrl), extractionEngine.loadedUrls)
+        val attempts = repository.lastLoggedAttempts
+        assertEquals(2, attempts.size)
+        assertEquals(
+            "false",
+            attempts[1].appliedLevers?.jsonObject?.get("url_sanitized")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "true",
+            attempts[1].appliedLevers?.jsonObject?.get("amnesia_protocol")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "strict",
+            attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
+        )
     }
 
     @Test
@@ -618,7 +721,9 @@ class HomeViewModelTest {
         val baselineRequest = extractionEngine.requests[0]
         val spoofRequest = extractionEngine.requests[1]
         assertEquals(false, baselineRequest.cleanSessionRequired)
+        assertEquals(false, baselineRequest.strictTrackingProtection)
         assertEquals(true, spoofRequest.cleanSessionRequired)
+        assertEquals(true, spoofRequest.strictTrackingProtection)
         assertEquals("spoof", spoofRequest.phase)
     }
 
@@ -666,6 +771,18 @@ class HomeViewModelTest {
                 .orEmpty()
         assertTrue(
             diagnostics.any { it.contains("clean session", ignoreCase = true) },
+        )
+        val spoofAttempts = repository.lastLoggedAttempts.filter { it.phase == "spoof" }
+        assertTrue(spoofAttempts.isNotEmpty())
+        assertTrue(
+            spoofAttempts.all {
+                it.appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content == "strict"
+            },
+        )
+        assertTrue(
+            spoofAttempts.all {
+                it.appliedLevers?.jsonObject?.get("amnesia_protocol")?.jsonPrimitive?.content == "false"
+            },
         )
     }
 
@@ -925,6 +1042,7 @@ class HomeViewModelTest {
     private class FakeRepository : FairPriceRepository {
         var logCalls: Int = 0
         var lastLoggedPriceCheck: PriceCheck? = null
+        var lastLoggedAttempts: List<PriceCheckAttempt> = emptyList()
         var logResult: Result<Unit> = Result.success(Unit)
         var lifetimeSavingsCents: Int = 0
 
@@ -938,6 +1056,7 @@ class HomeViewModelTest {
             priceCheck: PriceCheck,
             attempts: List<PriceCheckAttempt>,
         ): Result<Unit> {
+            lastLoggedAttempts = attempts
             return logPriceCheck(priceCheck)
         }
 

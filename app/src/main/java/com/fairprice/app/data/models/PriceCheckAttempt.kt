@@ -2,6 +2,7 @@ package com.fairprice.app.data.models
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class PriceCheckAttempt(
@@ -30,4 +31,8 @@ data class PriceCheckAttempt(
     val debugExtractionPath: String? = null,
     @SerialName("latency_ms")
     val latencyMs: Long? = null,
+    @SerialName("applied_levers")
+    val appliedLevers: JsonObject? = null,
+    @SerialName("execution_url")
+    val executionUrl: String? = null,
 )

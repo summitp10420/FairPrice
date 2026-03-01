@@ -21,6 +21,7 @@ import com.fairprice.app.engine.VpnPermissionRequiredException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.net.URLDecoder
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -116,6 +118,8 @@ class HomeViewModel(
         private const val USER_CONFIG_PREFIX = "user:"
         private const val URL_RESOLVE_CONNECT_TIMEOUT_MS = 5_000
         private const val URL_RESOLVE_READ_TIMEOUT_MS = 5_000
+        private val TRACKING_QUERY_PARAM_KEYS = setOf("gclid", "fbclid", "ref")
+        private const val TRACKING_PROTECTION_STRICT = "strict"
 
         private suspend fun resolveAmazonShortUrlBestEffort(inputUrl: String): String? {
             return withContext(Dispatchers.IO) {
@@ -139,6 +143,47 @@ class HomeViewModel(
                     connection.disconnect()
                 }
             }.getOrNull()
+        }
+
+        private fun sanitizeUrlForSpoof(inputUrl: String): SanitizedUrl {
+            val fragmentIndex = inputUrl.indexOf('#')
+            val baseWithQuery =
+                if (fragmentIndex >= 0) inputUrl.substring(0, fragmentIndex) else inputUrl
+            val fragmentSuffix =
+                if (fragmentIndex >= 0) inputUrl.substring(fragmentIndex) else ""
+
+            val queryIndex = baseWithQuery.indexOf('?')
+            if (queryIndex < 0) return SanitizedUrl(url = inputUrl, wasSanitized = false)
+
+            val base = baseWithQuery.substring(0, queryIndex)
+            val rawQuery = baseWithQuery.substring(queryIndex + 1)
+            if (rawQuery.isBlank()) return SanitizedUrl(url = inputUrl, wasSanitized = false)
+
+            val keptParts = rawQuery
+                .split("&")
+                .filter { it.isNotBlank() }
+                .filterNot(::isTrackingQueryPart)
+
+            val sanitizedBase = if (keptParts.isEmpty()) {
+                base
+            } else {
+                "$base?${keptParts.joinToString("&")}"
+            }
+            val sanitizedUrl = "$sanitizedBase$fragmentSuffix"
+            return SanitizedUrl(
+                url = sanitizedUrl,
+                wasSanitized = sanitizedUrl != inputUrl,
+            )
+        }
+
+        private fun isTrackingQueryPart(rawPart: String): Boolean {
+            val rawKey = rawPart.substringBefore('=', rawPart).trim()
+            if (rawKey.isBlank()) return false
+            val decodedKey = runCatching {
+                URLDecoder.decode(rawKey, Charsets.UTF_8.name())
+            }.getOrDefault(rawKey)
+            val normalizedKey = decodedKey.lowercase(Locale.US)
+            return normalizedKey.startsWith("utm_") || normalizedKey in TRACKING_QUERY_PARAM_KEYS
         }
     }
 
@@ -245,6 +290,7 @@ class HomeViewModel(
             var finalShowBrowser = false
             var awaitingVpnPermission = false
             val submittedUrl = canonicalizeUrlIfNeeded(rawSubmittedUrl)
+            val spoofUrlPlan = sanitizeUrlForSpoof(submittedUrl)
             val attemptRows = mutableListOf<PriceCheckAttempt>()
             val attemptedConfigs = mutableListOf<String>()
             val diagnostics = mutableListOf<String>()
@@ -284,6 +330,8 @@ class HomeViewModel(
                         throwable = throwable,
                         extracted = null,
                         latencyMs = baselineLatencyMs,
+                        executionUrl = submittedUrl,
+                        appliedLevers = buildAppliedLevers(urlSanitized = false),
                     )
                     terminalError =
                         "Baseline extraction failed: ${throwable.toUserMessage()}. You can continue shopping normally."
@@ -332,6 +380,8 @@ class HomeViewModel(
                     throwable = null,
                     extracted = baselineExtraction,
                     latencyMs = baselineLatencyMs,
+                    executionUrl = submittedUrl,
+                    appliedLevers = buildAppliedLevers(urlSanitized = false),
                 )
 
                 _uiState.update { current ->
@@ -384,7 +434,8 @@ class HomeViewModel(
                     }
                     val attemptNumber = attempt + 1
                     val execution = runSpoofAttempt(
-                        submittedUrl = submittedUrl,
+                        executionUrl = spoofUrlPlan.url,
+                        urlSanitized = spoofUrlPlan.wasSanitized,
                         config = config,
                         attemptNumber = attemptNumber,
                     )
@@ -397,6 +448,8 @@ class HomeViewModel(
                                 dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                                 attemptIndex = attempt,
                                 waitingConfig = config,
+                                spoofExecutionUrl = spoofUrlPlan.url,
+                                spoofUrlSanitized = spoofUrlPlan.wasSanitized,
                                 attemptedConfigs = attemptedConfigs.toList(),
                                 diagnostics = diagnostics.toList(),
                                 attemptRows = attemptRows.toList(),
@@ -421,6 +474,8 @@ class HomeViewModel(
                                 throwable = execution.throwable,
                                 extracted = null,
                                 latencyMs = execution.latencyMs,
+                                executionUrl = spoofUrlPlan.url,
+                                appliedLevers = execution.appliedLevers,
                             )
                             diagnostics += execution.userMessage
                             if (execution.throwable != null) {
@@ -438,6 +493,8 @@ class HomeViewModel(
                                 throwable = null,
                                 extracted = execution.result,
                                 latencyMs = execution.latencyMs,
+                                executionUrl = spoofUrlPlan.url,
+                                appliedLevers = execution.appliedLevers,
                             )
                             spoofedResult = execution.result
                             finalConfig = config
@@ -571,6 +628,12 @@ class HomeViewModel(
                         throwable = IllegalStateException("vpn_permission_denied"),
                         extracted = null,
                         latencyMs = 0L,
+                        executionUrl = pending.spoofExecutionUrl,
+                        appliedLevers = buildAppliedLevers(
+                            urlSanitized = pending.spoofUrlSanitized,
+                            amnesiaProtocol = false,
+                            trackingProtection = TRACKING_PROTECTION_STRICT,
+                        ),
                     ),
                 )
             }
@@ -639,7 +702,8 @@ class HomeViewModel(
                     }
 
                     val execution = runSpoofAttempt(
-                        submittedUrl = pending.submittedUrl,
+                        executionUrl = pending.spoofExecutionUrl,
+                        urlSanitized = pending.spoofUrlSanitized,
                         config = config,
                         attemptNumber = attemptNumber,
                     )
@@ -671,6 +735,8 @@ class HomeViewModel(
                                 throwable = execution.throwable,
                                 extracted = null,
                                 latencyMs = execution.latencyMs,
+                                executionUrl = pending.spoofExecutionUrl,
+                                appliedLevers = execution.appliedLevers,
                             )
                             diagnostics += execution.userMessage
                         }
@@ -685,6 +751,8 @@ class HomeViewModel(
                                 throwable = null,
                                 extracted = execution.result,
                                 latencyMs = execution.latencyMs,
+                                executionUrl = pending.spoofExecutionUrl,
+                                appliedLevers = execution.appliedLevers,
                             )
                             spoofedResult = execution.result
                             finalConfig = config
@@ -874,7 +942,8 @@ class HomeViewModel(
     }
 
     private suspend fun runSpoofAttempt(
-        submittedUrl: String,
+        executionUrl: String,
+        urlSanitized: Boolean,
         config: String,
         attemptNumber: Int,
     ): SpoofAttemptExecution {
@@ -912,11 +981,16 @@ class HomeViewModel(
                     processState = HomeProcessState.Processing("Extracting spoofed price ($attemptNumber/$SPOOF_ATTEMPT_MAX)..."),
                 )
             }
+            Log.i(
+                TAG,
+                "Spoof execution URL prepared (sanitized=$urlSanitized): $executionUrl",
+            )
             extractionResult = extractionEngine.loadAndExtract(
-                submittedUrl,
+                executionUrl,
                 request = ExtractionRequest(
                     cleanSessionRequired = true,
                     phase = "spoof",
+                    strictTrackingProtection = true,
                 ),
             )
         }
@@ -924,19 +998,40 @@ class HomeViewModel(
         val result = extractionResult
         if (result == null) {
             if (permissionIntent != null) {
-                return SpoofAttemptExecution.PermissionRequired(permissionIntent!!, latencyMs)
+                return SpoofAttemptExecution.PermissionRequired(
+                    intent = permissionIntent!!,
+                    appliedLevers = buildAppliedLevers(
+                        urlSanitized = urlSanitized,
+                        amnesiaProtocol = false,
+                        trackingProtection = TRACKING_PROTECTION_STRICT,
+                    ),
+                    latencyMs = latencyMs,
+                )
             }
             return SpoofAttemptExecution.Failure(
                 throwable = IllegalStateException("Spoof attempt interrupted."),
                 connected = connected,
                 userMessage = "Spoof attempt interrupted.",
+                appliedLevers = buildAppliedLevers(
+                    urlSanitized = urlSanitized,
+                    amnesiaProtocol = false,
+                    trackingProtection = TRACKING_PROTECTION_STRICT,
+                ),
                 latencyMs = latencyMs,
             )
         }
 
         if (result.isSuccess) {
             vpnRotationEngine.reportAttemptResult(config, success = true)
-            return SpoofAttemptExecution.Success(result.getOrThrow(), latencyMs)
+            return SpoofAttemptExecution.Success(
+                result = result.getOrThrow(),
+                appliedLevers = buildAppliedLevers(
+                    urlSanitized = urlSanitized,
+                    amnesiaProtocol = true,
+                    trackingProtection = TRACKING_PROTECTION_STRICT,
+                ),
+                latencyMs = latencyMs,
+            )
         }
 
         val throwable = result.exceptionOrNull()
@@ -951,6 +1046,11 @@ class HomeViewModel(
             throwable = throwable,
             connected = connected,
             userMessage = resolvedUserMessage,
+            appliedLevers = buildAppliedLevers(
+                urlSanitized = urlSanitized,
+                amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
+                trackingProtection = TRACKING_PROTECTION_STRICT,
+            ),
             latencyMs = latencyMs,
         )
     }
@@ -1013,6 +1113,8 @@ class HomeViewModel(
         throwable: Throwable?,
         extracted: ExtractionResult?,
         latencyMs: Long,
+        executionUrl: String?,
+        appliedLevers: JsonObject?,
     ): PriceCheckAttempt {
         return PriceCheckAttempt(
             phase = phase,
@@ -1027,7 +1129,25 @@ class HomeViewModel(
             detectedTactics = extracted?.tactics,
             debugExtractionPath = extracted?.debugExtractionPath,
             latencyMs = latencyMs,
+            executionUrl = executionUrl,
+            appliedLevers = appliedLevers,
         )
+    }
+
+    private fun buildAppliedLevers(
+        urlSanitized: Boolean,
+        amnesiaProtocol: Boolean? = null,
+        trackingProtection: String? = null,
+    ): JsonObject {
+        return buildJsonObject {
+            put("url_sanitized", JsonPrimitive(urlSanitized))
+            if (amnesiaProtocol != null) {
+                put("amnesia_protocol", JsonPrimitive(amnesiaProtocol))
+            }
+            if (trackingProtection != null) {
+                put("tracking_protection", JsonPrimitive(trackingProtection))
+            }
+        }
     }
 
     private fun retryCountFromAttempts(attemptRows: List<PriceCheckAttempt>): Int {
@@ -1158,6 +1278,7 @@ class HomeViewModel(
 
         data class Success(
             val result: ExtractionResult,
+            val appliedLevers: JsonObject,
             override val latencyMs: Long,
         ) : SpoofAttemptExecution
 
@@ -1165,11 +1286,13 @@ class HomeViewModel(
             val throwable: Throwable?,
             val connected: Boolean,
             val userMessage: String,
+            val appliedLevers: JsonObject,
             override val latencyMs: Long,
         ) : SpoofAttemptExecution
 
         data class PermissionRequired(
             val intent: Intent,
+            val appliedLevers: JsonObject,
             override val latencyMs: Long,
         ) : SpoofAttemptExecution
     }
@@ -1181,9 +1304,16 @@ class HomeViewModel(
         val dirtyBaselinePriceCents: Int?,
         val attemptIndex: Int,
         val waitingConfig: String,
+        val spoofExecutionUrl: String,
+        val spoofUrlSanitized: Boolean,
         val attemptedConfigs: List<String>,
         val diagnostics: List<String>,
         val attemptRows: List<PriceCheckAttempt>,
+    )
+
+    private data class SanitizedUrl(
+        val url: String,
+        val wasSanitized: Boolean,
     )
 
     private fun sanitizeDigitsOnly(value: String): String = value.filter(Char::isDigit)
