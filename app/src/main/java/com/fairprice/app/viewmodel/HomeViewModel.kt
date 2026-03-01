@@ -8,7 +8,9 @@ import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.ExtractionEngine
+import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
+import com.fairprice.app.engine.CleanSessionPreparationException
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
@@ -514,7 +516,9 @@ class HomeViewModel(
                     spoofedResult = spoofedResult,
                     dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                     attemptedConfigs = attemptedConfigs,
-                    finalConfig = finalConfig ?: strategy.wireguardConfig,
+                    finalConfig = requireNotNull(finalConfig) {
+                        "Spoof success missing final config."
+                    },
                     retryCount = retryCountFromAttempts(attemptRows),
                     outcome = "success",
                     diagnostics = diagnostics,
@@ -908,7 +912,13 @@ class HomeViewModel(
                     processState = HomeProcessState.Processing("Extracting spoofed price ($attemptNumber/$SPOOF_ATTEMPT_MAX)..."),
                 )
             }
-            extractionResult = extractionEngine.loadAndExtract(submittedUrl)
+            extractionResult = extractionEngine.loadAndExtract(
+                submittedUrl,
+                request = ExtractionRequest(
+                    cleanSessionRequired = true,
+                    phase = "spoof",
+                ),
+            )
         }
 
         val result = extractionResult
@@ -931,10 +941,16 @@ class HomeViewModel(
 
         val throwable = result.exceptionOrNull()
         vpnRotationEngine.reportAttemptResult(config, success = false)
+        val resolvedUserMessage = when {
+            failureUserMessage != null -> failureUserMessage.orEmpty()
+            isCleanSessionPreparationFailure(throwable) ->
+                "Spoof attempt blocked: unable to prepare a clean session. Reconnect VPN and retry."
+            else -> "Spoof attempt failed: ${throwable.toUserMessage()}"
+        }
         return SpoofAttemptExecution.Failure(
             throwable = throwable,
             connected = connected,
-            userMessage = failureUserMessage ?: "Spoof attempt failed: ${throwable.toUserMessage()}",
+            userMessage = resolvedUserMessage,
             latencyMs = latencyMs,
         )
     }
@@ -1032,6 +1048,11 @@ class HomeViewModel(
         if (message.contains("uapi")) return true
         if (message.contains("backend")) return true
         return false
+    }
+
+    private fun isCleanSessionPreparationFailure(throwable: Throwable?): Boolean {
+        return throwable is CleanSessionPreparationException ||
+            throwable?.cause is CleanSessionPreparationException
     }
 
     private suspend fun ensureBaselineVpnActive(): String? {

@@ -3,6 +3,7 @@ package com.fairprice.app.engine
 import android.content.Context
 import android.util.Log
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,11 +20,15 @@ import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.StorageController
 import org.mozilla.geckoview.WebExtension
 
 interface ExtractionEngine {
     val currentSession: StateFlow<GeckoSession?>
-    suspend fun loadAndExtract(url: String): Result<ExtractionResult>
+    suspend fun loadAndExtract(
+        url: String,
+        request: ExtractionRequest = ExtractionRequest(),
+    ): Result<ExtractionResult>
 }
 
 data class ExtractionResult(
@@ -31,6 +36,14 @@ data class ExtractionResult(
     val tactics: List<String>,
     val debugExtractionPath: String? = null,
 )
+
+data class ExtractionRequest(
+    val cleanSessionRequired: Boolean = false,
+    val phase: String = "default",
+)
+
+class CleanSessionPreparationException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
 
 class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private val tag = "GeckoExtractionEngine"
@@ -56,12 +69,18 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         )
     }
 
-    override suspend fun loadAndExtract(url: String): Result<ExtractionResult> = runCatching {
-        Log.i(tag, "Starting loadAndExtract for URL: $url")
+    override suspend fun loadAndExtract(url: String, request: ExtractionRequest): Result<ExtractionResult> = runCatching {
+        Log.i(
+            tag,
+            "Starting loadAndExtract for URL: $url (phase=${request.phase}, cleanRequired=${request.cleanSessionRequired})",
+        )
         val extension = awaitBuiltInExtension()
         val sessionSwap = createFreshSession()
         val session = sessionSwap.newSession
         attachDelegate(extension, session)
+        if (request.cleanSessionRequired) {
+            wipeStorageForCleanSession(request)
+        }
 
         withTimeout(EXTRACTION_TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
@@ -140,6 +159,44 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             tag,
             "Message delegate attached for extractor native app channel (session=${session.hashCode()})",
         )
+    }
+
+    private suspend fun wipeStorageForCleanSession(request: ExtractionRequest) {
+        Log.i(tag, "Clean session requested for phase=${request.phase}")
+        Log.i(tag, "Clean session storage clear started for phase=${request.phase}")
+        try {
+            withTimeout(CLEAN_SESSION_CLEAR_TIMEOUT_MS) {
+                awaitGeckoResult(
+                    runtime.storageController.clearData(StorageController.ClearFlags.ALL),
+                )
+            }
+            Log.i(tag, "Clean session storage clear succeeded for phase=${request.phase}")
+        } catch (throwable: Throwable) {
+            Log.e(tag, "Clean session storage clear failed for phase=${request.phase}", throwable)
+            throw CleanSessionPreparationException(
+                "Clean session preparation failed before navigation.",
+                throwable,
+            )
+        }
+    }
+
+    private suspend fun <T> awaitGeckoResult(result: GeckoResult<T>): T? {
+        return suspendCancellableCoroutine { continuation ->
+            result.accept(
+                { value ->
+                    if (continuation.isActive) {
+                        continuation.resume(value)
+                    }
+                },
+                { throwable ->
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(
+                            throwable ?: IllegalStateException("Gecko operation failed."),
+                        )
+                    }
+                },
+            )
+        }
     }
 
     private fun createFreshSession(): SessionSwap {
@@ -315,5 +372,6 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         private const val EXTENSION_RESOURCE_PATH = "resource://android/assets/extension/"
         private const val PRICE_EXTRACT_TYPE = "PRICE_EXTRACT"
         private const val EXTRACTION_TIMEOUT_MS = 15_000L
+        private const val CLEAN_SESSION_CLEAR_TIMEOUT_MS = 10_000L
     }
 }

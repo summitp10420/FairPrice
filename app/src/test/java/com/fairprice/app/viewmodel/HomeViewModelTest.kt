@@ -5,7 +5,9 @@ import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.ExtractionEngine
+import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
+import com.fairprice.app.engine.CleanSessionPreparationException
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
@@ -587,6 +589,87 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun spoofedExtraction_requestsCleanSessionPolicy() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2200, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(2, extractionEngine.loadCalls)
+        val baselineRequest = extractionEngine.requests[0]
+        val spoofRequest = extractionEngine.requests[1]
+        assertEquals(false, baselineRequest.cleanSessionRequired)
+        assertEquals(true, spoofRequest.cleanSessionRequired)
+        assertEquals("spoof", spoofRequest.phase)
+    }
+
+    @Test
+    fun cleanSessionPreparationFailure_failsClosedWithRetryGuidance() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2200, tactics = emptyList())),
+                Result.failure(CleanSessionPreparationException("wipe failed")),
+                Result.failure(CleanSessionPreparationException("wipe failed again")),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(1, vpnEngine.disconnectCalls)
+        val processState = viewModel.uiState.value.processState
+        assertTrue(processState is HomeProcessState.Error)
+        assertTrue(
+            (processState as HomeProcessState.Error)
+                .message
+                .contains("bounded retry", ignoreCase = true),
+        )
+        val diagnostics =
+            repository.lastLoggedPriceCheck?.rawExtractionData
+                ?.get("diagnostics")
+                ?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+                .orEmpty()
+        assertTrue(
+            diagnostics.any { it.contains("clean session", ignoreCase = true) },
+        )
+    }
+
+    @Test
     fun normalFlow_waitsForStabilizationGateBeforeSpoofExtraction() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
@@ -822,10 +905,15 @@ class HomeViewModelTest {
         override val currentSession: StateFlow<GeckoSession?> = sessionState
         var loadCalls: Int = 0
         val loadedUrls: MutableList<String> = mutableListOf()
+        val requests: MutableList<ExtractionRequest> = mutableListOf()
 
-        override suspend fun loadAndExtract(url: String): Result<ExtractionResult> {
+        override suspend fun loadAndExtract(
+            url: String,
+            request: ExtractionRequest,
+        ): Result<ExtractionResult> {
             loadCalls += 1
             loadedUrls += url
+            requests += request
             return if (extractionResults.isEmpty()) {
                 Result.failure(IllegalStateException("No extraction result configured"))
             } else {
