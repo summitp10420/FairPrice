@@ -2,6 +2,7 @@ package com.fairprice.app.viewmodel
 
 import android.content.Intent
 import com.fairprice.app.data.FairPriceRepository
+import com.fairprice.app.data.RunLogResult
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.ExtractionEngine
@@ -187,7 +188,7 @@ class HomeViewModelTest {
         assertEquals(null, summary.potentialSavings)
         assertEquals(false, summary.isVictory)
         assertEquals(listOf("cookie_tracking"), summary.tactics)
-        assertEquals("Default Strategy (stub)", summary.strategyName)
+        assertEquals("clean_strategy_v1.0", summary.strategyName)
         assertEquals("wg-test-config", summary.vpnConfig)
         assertEquals(listOf("wg-test-config"), summary.attemptedConfigs)
         assertEquals("wg-test-config", summary.finalConfig)
@@ -431,7 +432,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf(inputUrl, "$inputUrl#fp_engine=legacy"),
+            listOf(inputUrl, "$inputUrl#fp_engine=clean_control_v1"),
             extractionEngine.loadedUrls,
         )
         val spoofRequest = extractionEngine.requests[1]
@@ -446,7 +447,7 @@ class HomeViewModelTest {
             spoofAttempt.appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
         )
         assertEquals(
-            "legacy",
+            "clean_control_v1",
             spoofAttempt.appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
@@ -1134,6 +1135,41 @@ class HomeViewModelTest {
         assertTrue((processState as HomeProcessState.Error).message.contains("permission denied"))
     }
 
+    @Test
+    fun partialAttemptLogFailure_marksOutcomeAndAddsDiagnostics() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            logResult = Result.success(
+                RunLogResult(
+                    attemptsInserted = false,
+                    attemptInsertError = "request timeout",
+                    retailerIntelInserted = true,
+                ),
+            )
+        }
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = FakeVpnEngine(),
+            extractionEngine = FakeExtractionEngine(
+                extractionResults = mutableListOf(
+                    Result.success(ExtractionResult(priceCents = 2500, tactics = emptyList())),
+                    Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                ),
+            ),
+            strategyEngine = FakeStrategyEngine(
+                result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
+            ),
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals("partial_log_failure", repository.lastLoggedPriceCheck?.outcome)
+        val processState = viewModel.uiState.value.processState as HomeProcessState.Success
+        assertEquals("partial_log_failure", processState.summary.outcome)
+        assertTrue(processState.summary.diagnostics.any { it.contains("Partial telemetry") })
+    }
+
     private class FakeStrategyEngine(
         var result: Result<StrategyResult>,
     ) : PricingStrategyEngine {
@@ -1205,10 +1241,15 @@ class HomeViewModelTest {
         var logCalls: Int = 0
         var lastLoggedPriceCheck: PriceCheck? = null
         var lastLoggedAttempts: List<PriceCheckAttempt> = emptyList()
-        var logResult: Result<Unit> = Result.success(Unit)
+        var logResult: Result<RunLogResult> = Result.success(
+            RunLogResult(
+                attemptsInserted = true,
+                retailerIntelInserted = true,
+            ),
+        )
         var lifetimeSavingsCents: Int = 0
 
-        override suspend fun logPriceCheck(priceCheck: PriceCheck): Result<Unit> {
+        override suspend fun logPriceCheck(priceCheck: PriceCheck): Result<RunLogResult> {
             logCalls += 1
             lastLoggedPriceCheck = priceCheck
             return logResult
@@ -1217,9 +1258,14 @@ class HomeViewModelTest {
         override suspend fun logPriceCheckRun(
             priceCheck: PriceCheck,
             attempts: List<PriceCheckAttempt>,
-        ): Result<Unit> {
+        ): Result<RunLogResult> {
             lastLoggedAttempts = attempts
-            return logPriceCheck(priceCheck)
+            val payload = if (logResult.getOrNull()?.attemptsInserted == false) {
+                priceCheck.copy(outcome = "partial_log_failure")
+            } else {
+                priceCheck
+            }
+            return logPriceCheck(payload)
         }
 
         override suspend fun fetchLifetimePotentialSavingsCents(): Result<Int> {

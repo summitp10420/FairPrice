@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fairprice.app.data.FairPriceRepository
+import com.fairprice.app.data.RunLogResult
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.ExtractionEngine
@@ -123,7 +124,6 @@ class HomeViewModel(
         private const val TAG = "HomeViewModel"
         private const val VPN_STABILIZATION_DELAY_MS = 2_000L
         private const val SPOOF_ATTEMPT_MAX = 2
-        private const val DEFAULT_STRATEGY_NAME = "Default Strategy (stub)"
         private const val USER_CONFIG_PREFIX = "user:"
         private const val URL_RESOLVE_CONNECT_TIMEOUT_MS = 5_000
         private const val URL_RESOLVE_READ_TIMEOUT_MS = 5_000
@@ -133,6 +133,7 @@ class HomeViewModel(
         private const val ENGINE_VERSION = "11.5a"
         private const val ENGINE_BUILD_ID = "local-dev"
         private const val ENGINE_HASH_KEY = "fp_engine"
+        private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
 
         private suspend fun resolveAmazonShortUrlBestEffort(inputUrl: String): String? {
             return withContext(Dispatchers.IO) {
@@ -438,7 +439,10 @@ class HomeViewModel(
                             dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                             diagnostics = diagnostics,
                         )
-                        repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                        val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                        if (failedLogResult.isSuccess) {
+                            diagnostics += logResultDiagnostics(failedLogResult.getOrThrow())
+                        }
                         return@launch
                     }
                 val profileResolution = resolveActiveEngineProfile(
@@ -469,6 +473,7 @@ class HomeViewModel(
                     val execution = runSpoofAttempt(
                         executionUrl = spoofUrlPlan.url,
                         urlSanitized = spoofUrlPlan.wasSanitized,
+                        strategy = strategy,
                         engineProfile = profileResolution.profile,
                         engineSelectionSource = profileResolution.selectionSource,
                         config = config,
@@ -550,7 +555,7 @@ class HomeViewModel(
                     val failedPriceCheck = buildPriceCheck(
                         url = submittedUrl,
                         strategyId = strategy.strategyId,
-                        strategyName = DEFAULT_STRATEGY_NAME,
+                        strategyName = strategy.strategyName,
                         baselinePriceCents = baselineExtraction.priceCents,
                         foundPriceCents = baselineExtraction.priceCents,
                         extractionSuccessful = false,
@@ -568,14 +573,19 @@ class HomeViewModel(
                     _uiState.update { current ->
                         current.copy(processState = HomeProcessState.Processing("Logging run result..."))
                     }
-                    repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                    val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                    if (failedLogResult.isFailure) {
+                        diagnostics += "Supabase log failed: ${failedLogResult.exceptionOrNull().toUserMessage()}"
+                    } else {
+                        diagnostics += logResultDiagnostics(failedLogResult.getOrThrow())
+                    }
                     return@launch
                 }
 
                 val priceCheck = buildPriceCheck(
                     url = submittedUrl,
                     strategyId = strategy.strategyId,
-                    strategyName = DEFAULT_STRATEGY_NAME,
+                    strategyName = strategy.strategyName,
                     baselinePriceCents = baselineExtraction.priceCents,
                     foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
@@ -601,6 +611,8 @@ class HomeViewModel(
                     Log.e("HomeViewModel", "price_checks insert failed", throwable)
                     return@launch
                 }
+                val runLog = logResult.getOrThrow()
+                diagnostics += logResultDiagnostics(runLog)
 
                 Log.i("HomeViewModel", "price_checks insert succeeded")
                 val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
@@ -614,9 +626,10 @@ class HomeViewModel(
                         "Spoof success missing final config."
                     },
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = "success",
+                    outcome = if (runLog.attemptsInserted) "success" else "partial_log_failure",
                     diagnostics = diagnostics,
                     lifetimePotentialSavingsCents = lifetimeSavingsCents,
+                    strategyName = strategy.strategyName,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -670,6 +683,7 @@ class HomeViewModel(
                             urlSanitized = pending.spoofUrlSanitized,
                             amnesiaProtocol = false,
                             trackingProtection = trackingProtectionForProfile(pending.spoofEngineProfile),
+                            strategy = pending.strategy,
                             engineProfile = pending.spoofEngineProfile,
                             engineSelectionSource = pending.spoofEngineSelectionSource,
                         ),
@@ -680,7 +694,7 @@ class HomeViewModel(
                 val deniedPriceCheck = buildPriceCheck(
                     url = pending.submittedUrl,
                     strategyId = pending.strategy.strategyId,
-                    strategyName = DEFAULT_STRATEGY_NAME,
+                    strategyName = pending.strategy.strategyName,
                     baselinePriceCents = pending.baselineResult.priceCents,
                     foundPriceCents = pending.baselineResult.priceCents,
                     extractionSuccessful = false,
@@ -695,7 +709,10 @@ class HomeViewModel(
                     dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
                 )
-                repository.logPriceCheckRun(deniedPriceCheck, attemptRows)
+                val deniedLogResult = repository.logPriceCheckRun(deniedPriceCheck, attemptRows)
+                if (deniedLogResult.isSuccess) {
+                    diagnostics += logResultDiagnostics(deniedLogResult.getOrThrow())
+                }
             }
             _uiState.update { current ->
                 current.copy(
@@ -744,6 +761,7 @@ class HomeViewModel(
                     val execution = runSpoofAttempt(
                         executionUrl = pending.spoofExecutionUrl,
                         urlSanitized = pending.spoofUrlSanitized,
+                        strategy = pending.strategy,
                         engineProfile = pending.spoofEngineProfile,
                         engineSelectionSource = pending.spoofEngineSelectionSource,
                         config = config,
@@ -813,7 +831,7 @@ class HomeViewModel(
                     val failedPriceCheck = buildPriceCheck(
                         url = pending.submittedUrl,
                         strategyId = pending.strategy.strategyId,
-                        strategyName = DEFAULT_STRATEGY_NAME,
+                        strategyName = pending.strategy.strategyName,
                         baselinePriceCents = pending.baselineResult.priceCents,
                         foundPriceCents = pending.baselineResult.priceCents,
                         extractionSuccessful = false,
@@ -828,14 +846,17 @@ class HomeViewModel(
                         dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
                     )
-                    repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                    val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
+                    if (failedLogResult.isSuccess) {
+                        diagnostics += logResultDiagnostics(failedLogResult.getOrThrow())
+                    }
                     return@launch
                 }
 
                 val priceCheck = buildPriceCheck(
                     url = pending.submittedUrl,
                     strategyId = pending.strategy.strategyId,
-                    strategyName = DEFAULT_STRATEGY_NAME,
+                    strategyName = pending.strategy.strategyName,
                     baselinePriceCents = pending.baselineResult.priceCents,
                     foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
@@ -861,6 +882,8 @@ class HomeViewModel(
                     Log.e("HomeViewModel", "price_checks insert failed after permission grant", throwable)
                     return@launch
                 }
+                val runLog = logResult.getOrThrow()
+                diagnostics += logResultDiagnostics(runLog)
 
                 val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
                     .getOrDefault(0)
@@ -871,9 +894,10 @@ class HomeViewModel(
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: pending.waitingConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = "success",
+                    outcome = if (runLog.attemptsInserted) "success" else "partial_log_failure",
                     diagnostics = diagnostics,
                     lifetimePotentialSavingsCents = lifetimeSavingsCents,
+                    strategyName = pending.strategy.strategyName,
                 )
                 keepVpnForShopping = true
                 shoppingVpnActive = true
@@ -986,6 +1010,7 @@ class HomeViewModel(
     private suspend fun runSpoofAttempt(
         executionUrl: String,
         urlSanitized: Boolean,
+        strategy: StrategyResult,
         engineProfile: EngineProfile,
         engineSelectionSource: String,
         config: String,
@@ -1051,6 +1076,7 @@ class HomeViewModel(
                         urlSanitized = urlSanitized,
                         amnesiaProtocol = false,
                         trackingProtection = trackingProtection,
+                        strategy = strategy,
                         engineProfile = engineProfile,
                         engineSelectionSource = engineSelectionSource,
                     ),
@@ -1065,6 +1091,7 @@ class HomeViewModel(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = false,
                     trackingProtection = trackingProtection,
+                    strategy = strategy,
                     engineProfile = engineProfile,
                     engineSelectionSource = engineSelectionSource,
                 ),
@@ -1080,6 +1107,7 @@ class HomeViewModel(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = true,
                     trackingProtection = trackingProtection,
+                    strategy = strategy,
                     engineProfile = engineProfile,
                     engineSelectionSource = engineSelectionSource,
                 ),
@@ -1103,6 +1131,7 @@ class HomeViewModel(
                 urlSanitized = urlSanitized,
                 amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
                 trackingProtection = trackingProtection,
+                strategy = strategy,
                 engineProfile = engineProfile,
                 engineSelectionSource = engineSelectionSource,
             ),
@@ -1193,6 +1222,7 @@ class HomeViewModel(
         urlSanitized: Boolean,
         amnesiaProtocol: Boolean? = null,
         trackingProtection: String? = null,
+        strategy: StrategyResult? = null,
         engineProfile: EngineProfile? = null,
         engineSelectionSource: String? = null,
     ): JsonObject {
@@ -1203,6 +1233,11 @@ class HomeViewModel(
             }
             if (trackingProtection != null) {
                 put("tracking_protection", JsonPrimitive(trackingProtection))
+            }
+            if (strategy != null) {
+                put("strategy_name", JsonPrimitive(strategy.strategyName))
+                put("strategy_engine", JsonPrimitive(strategy.strategyEngineName))
+                put("strategy_version", JsonPrimitive(strategy.strategyVersion))
             }
             if (engineProfile != null) {
                 put("engine_profile", JsonPrimitive(engineProfile.toTelemetryValue()))
@@ -1218,6 +1253,19 @@ class HomeViewModel(
     private fun retryCountFromAttempts(attemptRows: List<PriceCheckAttempt>): Int {
         val spoofAttempts = attemptRows.count { it.phase == "spoof" }
         return (spoofAttempts - 1).coerceAtLeast(0)
+    }
+
+    private fun logResultDiagnostics(result: RunLogResult): List<String> {
+        val diagnostics = mutableListOf<String>()
+        if (!result.attemptsInserted) {
+            val details = result.attemptInsertError?.takeIf { it.isNotBlank() } ?: "unknown error"
+            diagnostics += "Partial telemetry: attempt rows failed to persist ($details)."
+        }
+        if (!result.retailerIntelInserted) {
+            val details = result.retailerIntelError?.takeIf { it.isNotBlank() } ?: "unknown error"
+            diagnostics += "Retailer intel write skipped ($details)."
+        }
+        return diagnostics
     }
 
     private fun Throwable?.toUserMessage(): String {
@@ -1267,7 +1315,7 @@ class HomeViewModel(
 
     private fun EngineProfile.toTelemetryValue(): String {
         return when (this) {
-            EngineProfile.LEGACY -> "legacy"
+            EngineProfile.LEGACY -> CONTROL_PROFILE_TOKEN
             EngineProfile.YALE_SMART -> "yale_smart"
         }
     }
@@ -1378,6 +1426,7 @@ class HomeViewModel(
         outcome: String,
         diagnostics: List<String>,
         lifetimePotentialSavingsCents: Int,
+        strategyName: String,
     ): SummaryData {
         val baseline = formatUsd(baselineResult.priceCents)
         val spoofed = formatUsd(spoofedResult.priceCents)
@@ -1397,7 +1446,7 @@ class HomeViewModel(
             potentialSavings = potentialSavingsCents?.takeIf { it > 0 }?.let(::formatUsd),
             isVictory = isVictory,
             tactics = baselineResult.tactics,
-            strategyName = DEFAULT_STRATEGY_NAME,
+            strategyName = strategyName,
             vpnConfig = deployedConfigDisplay,
             attemptedConfigs = attemptedDisplay,
             finalConfig = finalDisplay,

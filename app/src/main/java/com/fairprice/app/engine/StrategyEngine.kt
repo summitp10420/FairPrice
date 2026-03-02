@@ -7,6 +7,9 @@ enum class EngineProfile {
 
 data class StrategyResult(
     val strategyId: String?,
+    val strategyName: String = "clean_strategy_v1.0",
+    val strategyEngineName: String = "strategy_engine_v1.0",
+    val strategyVersion: String = "1.0",
     val wireguardConfig: String = "",
     val engineProfile: EngineProfile = EngineProfile.YALE_SMART,
 )

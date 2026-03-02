@@ -1,7 +1,8 @@
 (() => {
   const ENGINE_HASH_KEY = "fp_engine";
   const ENHANCED_VALUE = "yale_smart";
-  const LEGACY_VALUE = "legacy";
+  const CONTROL_VALUE = "clean_control_v1";
+  const LEGACY_COMPAT_VALUE = "legacy";
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
   const HOOK_SENTINEL = "__fp_canvas_hook_installed";
@@ -79,11 +80,13 @@
   }
 
   const engine = parseEngineFromHash(window.location.hash);
+  const isKnownProfile =
+    engine === ENHANCED_VALUE || engine === CONTROL_VALUE || engine === LEGACY_COMPAT_VALUE;
   const enhanced = engine === ENHANCED_VALUE;
   window[ENHANCED_FLAG] = enhanced;
   window[HW_FP_FLAG] = false;
 
-  if (engine === ENHANCED_VALUE || engine === LEGACY_VALUE) {
+  if (isKnownProfile) {
     scrubEngineHashToken();
   }
 

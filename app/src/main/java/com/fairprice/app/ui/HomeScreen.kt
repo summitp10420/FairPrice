@@ -238,7 +238,7 @@ fun HomeScreen(
                         enabled = uiState.adminEngineOverride != EngineOverride.FORCE_LEGACY,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Legacy")
+                        Text("Clean Control")
                     }
                     OutlinedButton(
                         onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_YALE_SMART) },

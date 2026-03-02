@@ -9,14 +9,24 @@ import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.exceptions.HttpRequestException
 import io.github.jan.supabase.postgrest.postgrest
 import java.io.IOException
+import java.time.Instant
 import kotlin.random.Random
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+
+data class RunLogResult(
+    val attemptsInserted: Boolean,
+    val attemptInsertError: String? = null,
+    val retailerIntelInserted: Boolean = false,
+    val retailerIntelError: String? = null,
+)
 
 interface FairPriceRepository {
-    suspend fun logPriceCheck(priceCheck: PriceCheck): Result<Unit>
-    suspend fun logPriceCheckRun(priceCheck: PriceCheck, attempts: List<PriceCheckAttempt>): Result<Unit>
+    suspend fun logPriceCheck(priceCheck: PriceCheck): Result<RunLogResult>
+    suspend fun logPriceCheckRun(priceCheck: PriceCheck, attempts: List<PriceCheckAttempt>): Result<RunLogResult>
     suspend fun fetchLifetimePotentialSavingsCents(): Result<Int>
 }
 
@@ -25,21 +35,34 @@ class FairPriceRepositoryImpl(
 ) : FairPriceRepository {
     private val tag = "FairPriceRepository"
 
-    override suspend fun logPriceCheck(priceCheck: PriceCheck): Result<Unit> {
+    override suspend fun logPriceCheck(priceCheck: PriceCheck): Result<RunLogResult> {
         return logPriceCheckRun(priceCheck, attempts = emptyList())
     }
 
     override suspend fun logPriceCheckRun(
         priceCheck: PriceCheck,
         attempts: List<PriceCheckAttempt>,
-    ): Result<Unit> {
+    ): Result<RunLogResult> {
         return runCatching {
             ensureAuthenticatedSession()
-            insertSummaryWithFallback(priceCheck)
-            if (attempts.isNotEmpty()) {
+            val attemptInsert = if (attempts.isNotEmpty()) {
                 insertAttemptsWithRetry(attempts)
+            } else {
+                Result.success(Unit)
             }
-            Unit
+            val summaryPayload = if (attemptInsert.isFailure) {
+                priceCheck.copy(outcome = "partial_log_failure")
+            } else {
+                priceCheck
+            }
+            insertSummaryWithFallback(summaryPayload)
+            val retailerIntel = insertRetailerIntel(priceCheck)
+            RunLogResult(
+                attemptsInserted = attemptInsert.isSuccess,
+                attemptInsertError = attemptInsert.exceptionOrNull()?.message,
+                retailerIntelInserted = retailerIntel.isSuccess,
+                retailerIntelError = retailerIntel.exceptionOrNull()?.message,
+            )
         }
     }
 
@@ -98,7 +121,7 @@ class FairPriceRepositoryImpl(
         throw lastFailure ?: IllegalStateException("Price check insert failed without a throwable.")
     }
 
-    private suspend fun insertAttemptsWithRetry(attempts: List<PriceCheckAttempt>) {
+    private suspend fun insertAttemptsWithRetry(attempts: List<PriceCheckAttempt>): Result<Unit> {
         val maxAttempts = 3
         var attempt = 0
         var lastFailure: Throwable? = null
@@ -106,7 +129,7 @@ class FairPriceRepositoryImpl(
         while (attempt < maxAttempts) {
             try {
                 supabaseClient.postgrest["price_check_attempts"].insert(attempts)
-                return
+                return Result.success(Unit)
             } catch (throwable: Throwable) {
                 lastFailure = throwable
                 attempt += 1
@@ -119,6 +142,40 @@ class FairPriceRepositoryImpl(
         }
 
         Log.w(tag, "Attempt telemetry insert failed; continuing without attempt rows.", lastFailure)
+        return Result.failure(lastFailure ?: IllegalStateException("Attempt telemetry insert failed"))
+    }
+
+    private suspend fun insertRetailerIntel(priceCheck: PriceCheck): Result<Unit> {
+        return runCatching<Unit> {
+            val now = Instant.now().toString()
+            val retailer = RetailerRow(
+                domain = priceCheck.domain,
+                firstSeenAt = now,
+                lastSeenAt = now,
+                activeTracking = true,
+            )
+            runCatching {
+                supabaseClient.postgrest["retailers"].insert(retailer)
+            }.onFailure {
+                // Keep retailer intel non-blocking; duplicate/shape errors should not break price checks.
+                Log.w(tag, "Retailer insert/upsert failed; continuing.", it)
+            }
+
+            val tactics = extractDetectedTactics(priceCheck)
+            if (tactics.isEmpty()) return@runCatching Unit
+            val strategyRows = tactics.map { tactic ->
+                RetailerStrategyRow(
+                    retailerDomain = priceCheck.domain,
+                    tactic = tactic,
+                    observedAt = now,
+                    sourcePhase = "baseline",
+                )
+            }
+            supabaseClient.postgrest["retailer_strategies"].insert(strategyRows)
+            Unit
+        }.onFailure { throwable ->
+            Log.w(tag, "Retailer intel insert failed; continuing without retailer rows.", throwable)
+        }
     }
 
     private fun PriceCheck.toLegacyPayload(): PriceCheck {
@@ -147,5 +204,32 @@ class FairPriceRepositoryImpl(
         val dirtyBaselinePriceCents: Int? = null,
         @SerialName("found_price_cents")
         val foundPriceCents: Int? = null,
+    )
+
+    private fun extractDetectedTactics(priceCheck: PriceCheck): List<String> {
+        val value = priceCheck.rawExtractionData["detected_tactics"] as? JsonArray ?: return emptyList()
+        return value.mapNotNull { (it as? JsonPrimitive)?.content?.trim()?.takeIf(String::isNotEmpty) }
+    }
+
+    @Serializable
+    private data class RetailerRow(
+        val domain: String,
+        @SerialName("first_seen_at")
+        val firstSeenAt: String,
+        @SerialName("last_seen_at")
+        val lastSeenAt: String,
+        @SerialName("active_tracking")
+        val activeTracking: Boolean,
+    )
+
+    @Serializable
+    private data class RetailerStrategyRow(
+        @SerialName("retailer_domain")
+        val retailerDomain: String,
+        val tactic: String,
+        @SerialName("observed_at")
+        val observedAt: String,
+        @SerialName("source_phase")
+        val sourcePhase: String,
     )
 }
