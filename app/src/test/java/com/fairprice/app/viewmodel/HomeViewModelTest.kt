@@ -196,7 +196,10 @@ class HomeViewModelTest {
         assertEquals("success", summary.outcome)
         assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
         assertEquals(
-            listOf("https://example.com/p/123", "https://example.com/p/123#fp_engine=yale_smart"),
+            listOf(
+                "https://example.com/p/123#fp_engine=baseline_intel",
+                "https://example.com/p/123#fp_engine=yale_smart",
+            ),
             extractionEngine.loadedUrls,
         )
     }
@@ -231,7 +234,10 @@ class HomeViewModelTest {
 
         assertEquals(canonicalUrl, strategyEngine.lastUrl)
         assertEquals(
-            listOf(canonicalUrl, "$canonicalUrl#fp_engine=yale_smart"),
+            listOf(
+                "$canonicalUrl#fp_engine=baseline_intel",
+                "$canonicalUrl#fp_engine=yale_smart",
+            ),
             extractionEngine.loadedUrls,
         )
         assertEquals(canonicalUrl, repository.lastLoggedPriceCheck?.productUrl)
@@ -267,7 +273,10 @@ class HomeViewModelTest {
 
         assertEquals(originalShortUrl, strategyEngine.lastUrl)
         assertEquals(
-            listOf(originalShortUrl, "$originalShortUrl#fp_engine=yale_smart"),
+            listOf(
+                "$originalShortUrl#fp_engine=baseline_intel",
+                "$originalShortUrl#fp_engine=yale_smart",
+            ),
             extractionEngine.loadedUrls,
         )
         assertEquals(originalShortUrl, repository.lastLoggedPriceCheck?.productUrl)
@@ -303,7 +312,7 @@ class HomeViewModelTest {
 
         assertEquals(
             listOf(
-                inputUrl,
+                "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details&fp_engine=baseline_intel",
                 "https://example.com/p/123?sku=99#details&fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
@@ -375,7 +384,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf(inputUrl, "$inputUrl#fp_engine=yale_smart"),
+            listOf("$inputUrl#fp_engine=baseline_intel", "$inputUrl#fp_engine=yale_smart"),
             extractionEngine.loadedUrls,
         )
         val attempts = repository.lastLoggedAttempts
@@ -432,7 +441,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf(inputUrl, "$inputUrl#fp_engine=clean_control_v1"),
+            listOf("$inputUrl#fp_engine=baseline_intel", "$inputUrl#fp_engine=clean_control_v1"),
             extractionEngine.loadedUrls,
         )
         val spoofRequest = extractionEngine.requests[1]
@@ -1168,6 +1177,40 @@ class HomeViewModelTest {
         val processState = viewModel.uiState.value.processState as HomeProcessState.Success
         assertEquals("partial_log_failure", processState.summary.outcome)
         assertTrue(processState.summary.diagnostics.any { it.contains("Partial telemetry") })
+    }
+
+    @Test
+    fun retailerIntelWriteFailure_surfacesDiagnosticsWithoutFailingRun() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            logResult = Result.success(
+                RunLogResult(
+                    attemptsInserted = true,
+                    retailerIntelInserted = false,
+                    retailerIntelError = "retailer conflict",
+                ),
+            )
+        }
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = FakeVpnEngine(),
+            extractionEngine = FakeExtractionEngine(
+                extractionResults = mutableListOf(
+                    Result.success(ExtractionResult(priceCents = 3000, tactics = listOf("cookie_tracking"))),
+                    Result.success(ExtractionResult(priceCents = 2500, tactics = listOf("cookie_tracking"))),
+                ),
+            ),
+            strategyEngine = FakeStrategyEngine(
+                result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
+            ),
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        val processState = viewModel.uiState.value.processState as HomeProcessState.Success
+        assertEquals("success", processState.summary.outcome)
+        assertTrue(processState.summary.diagnostics.any { it.contains("Retailer intel write skipped") })
     }
 
     private class FakeStrategyEngine(

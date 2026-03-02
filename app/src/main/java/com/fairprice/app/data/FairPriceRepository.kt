@@ -157,8 +157,16 @@ class FairPriceRepositoryImpl(
             runCatching {
                 supabaseClient.postgrest["retailers"].insert(retailer)
             }.onFailure {
-                // Keep retailer intel non-blocking; duplicate/shape errors should not break price checks.
-                Log.w(tag, "Retailer insert/upsert failed; continuing.", it)
+                // Existing domain conflict should refresh recency without mutating first_seen_at.
+                val recencyRefresh = runCatching {
+                    updateRetailerRecency(
+                        domain = priceCheck.domain,
+                        lastSeenAt = now,
+                    )
+                }
+                if (recencyRefresh.isFailure) {
+                    Log.w(tag, "Retailer insert/update failed; continuing.", recencyRefresh.exceptionOrNull())
+                }
             }
 
             val tactics = extractDetectedTactics(priceCheck)
@@ -211,6 +219,23 @@ class FairPriceRepositoryImpl(
         return value.mapNotNull { (it as? JsonPrimitive)?.content?.trim()?.takeIf(String::isNotEmpty) }
     }
 
+    private suspend fun updateRetailerRecency(
+        domain: String,
+        lastSeenAt: String,
+    ) {
+        supabaseClient.postgrest["retailers"]
+            .update(
+                RetailerRecencyUpdate(
+                    lastSeenAt = lastSeenAt,
+                    activeTracking = true,
+                ),
+            ) {
+                filter {
+                    eq("domain", domain)
+                }
+            }
+    }
+
     @Serializable
     private data class RetailerRow(
         val domain: String,
@@ -231,5 +256,13 @@ class FairPriceRepositoryImpl(
         val observedAt: String,
         @SerialName("source_phase")
         val sourcePhase: String,
+    )
+
+    @Serializable
+    private data class RetailerRecencyUpdate(
+        @SerialName("last_seen_at")
+        val lastSeenAt: String,
+        @SerialName("active_tracking")
+        val activeTracking: Boolean,
     )
 }

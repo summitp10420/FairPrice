@@ -4,10 +4,22 @@
   const RETRY_DELAY_MS = 500;
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
-  const HW_FP_ATTR = "data-fp-hardware-fp";
+  const HW_FP_MESSAGE_TYPE = "__fp_hw_fp_signal_v1";
   let didSend = false;
   let attempts = 0;
   let observer = null;
+  let hardwareFingerprintingSeen = false;
+
+  function handleFingerprintSignalMessage(event) {
+    if (event.source !== window) return;
+    const payload = event.data;
+    if (!payload || typeof payload !== "object") return;
+    if (payload.type !== HW_FP_MESSAGE_TYPE) return;
+    hardwareFingerprintingSeen = true;
+    window[HW_FP_FLAG] = true;
+  }
+
+  window.addEventListener("message", handleFingerprintSignalMessage);
 
   function normalizePriceToCents(value) {
     if (!value) return null;
@@ -163,10 +175,9 @@
         tactics.add("surveillance_active");
       }
 
-      const hardwareFingerprintingDetected =
-        window[HW_FP_FLAG] === true ||
-        document.documentElement?.getAttribute(HW_FP_ATTR) === "1";
-      if (hardwareFingerprintingDetected) {
+      const hardwareFingerprintingDetectedNow =
+        window[HW_FP_FLAG] === true || hardwareFingerprintingSeen === true;
+      if (hardwareFingerprintingDetectedNow) {
         tactics.add("hardware_fingerprinting");
       }
     }

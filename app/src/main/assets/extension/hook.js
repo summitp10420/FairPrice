@@ -1,13 +1,14 @@
 (() => {
   const ENGINE_HASH_KEY = "fp_engine";
   const ENHANCED_VALUE = "yale_smart";
+  const BASELINE_INTEL_VALUE = "baseline_intel";
   const CONTROL_VALUE = "clean_control_v1";
   const LEGACY_COMPAT_VALUE = "legacy";
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
+  const HW_FP_MESSAGE_TYPE = "__fp_hw_fp_signal_v1";
   const HOOK_SENTINEL = "__fp_canvas_hook_installed";
   const PAGE_HOOK_SENTINEL = "__fp_canvas_page_hook_injected";
-  const HW_FP_ATTR = "data-fp-hardware-fp";
 
   function parseEngineFromHash(hash) {
     const raw = String(hash || "").replace(/^#/, "");
@@ -39,7 +40,7 @@
 
   function markHardwareFingerprinting() {
     window[HW_FP_FLAG] = true;
-    document.documentElement?.setAttribute(HW_FP_ATTR, "1");
+    window.postMessage({ type: HW_FP_MESSAGE_TYPE }, window.location.origin);
   }
 
   function installCanvasObserverInContentRealm() {
@@ -65,9 +66,7 @@
         const original = proto.toDataURL;
         proto.toDataURL = function(...args) {
           try {
-            if (document.documentElement) {
-              document.documentElement.setAttribute("${HW_FP_ATTR}", "1");
-            }
+            window.postMessage({ type: "${HW_FP_MESSAGE_TYPE}" }, window.location.origin);
           } catch (e) {}
           return original.apply(this, args);
         };
@@ -81,8 +80,11 @@
 
   const engine = parseEngineFromHash(window.location.hash);
   const isKnownProfile =
-    engine === ENHANCED_VALUE || engine === CONTROL_VALUE || engine === LEGACY_COMPAT_VALUE;
-  const enhanced = engine === ENHANCED_VALUE;
+    engine === ENHANCED_VALUE ||
+    engine === BASELINE_INTEL_VALUE ||
+    engine === CONTROL_VALUE ||
+    engine === LEGACY_COMPAT_VALUE;
+  const enhanced = engine === ENHANCED_VALUE || engine === BASELINE_INTEL_VALUE;
   window[ENHANCED_FLAG] = enhanced;
   window[HW_FP_FLAG] = false;
 

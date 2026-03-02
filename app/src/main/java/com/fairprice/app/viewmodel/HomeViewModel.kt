@@ -134,6 +134,7 @@ class HomeViewModel(
         private const val ENGINE_BUILD_ID = "local-dev"
         private const val ENGINE_HASH_KEY = "fp_engine"
         private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
+        private const val BASELINE_INTEL_TOKEN = "baseline_intel"
 
         private suspend fun resolveAmazonShortUrlBestEffort(inputUrl: String): String? {
             return withContext(Dispatchers.IO) {
@@ -339,8 +340,9 @@ class HomeViewModel(
                 }
                 var baselineResultValue: Result<ExtractionResult> =
                     Result.failure(IllegalStateException("Baseline extraction did not run."))
+                val baselineNavigationUrl = buildBaselineIntelNavigationUrl(submittedUrl)
                 val baselineLatencyMs = measureTimeMillis {
-                    baselineResultValue = extractionEngine.loadAndExtract(submittedUrl)
+                    baselineResultValue = extractionEngine.loadAndExtract(baselineNavigationUrl)
                 }
                 val baselineResult = baselineResultValue
                 if (baselineResult.isFailure) {
@@ -1324,7 +1326,19 @@ class HomeViewModel(
         executionUrl: String,
         profile: EngineProfile,
     ): String {
-        val tokenValue = profile.toTelemetryValue()
+        return appendEngineBootstrapToken(executionUrl, profile.toTelemetryValue())
+    }
+
+    private fun buildBaselineIntelNavigationUrl(
+        executionUrl: String,
+    ): String {
+        return appendEngineBootstrapToken(executionUrl, BASELINE_INTEL_TOKEN)
+    }
+
+    private fun appendEngineBootstrapToken(
+        executionUrl: String,
+        tokenValue: String,
+    ): String {
         val hashIndex = executionUrl.indexOf('#')
         if (hashIndex < 0) {
             return "$executionUrl#$ENGINE_HASH_KEY=$tokenValue"
