@@ -111,7 +111,7 @@ fun HomeScreen(
                 onValueChange = onDirtyBaselineChanged,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                label = { Text("Price You See (Baseline)") },
+                label = { Text("User Baseline") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 placeholder = { Text("$0.00") },
             )
@@ -288,16 +288,22 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             processState.summary.dirtyBaselinePrice?.let {
-                                Text("Baseline Price: $it")
-                            } ?: Text("Baseline Price: Skipped")
-                            Text("Clean Session Control: ${processState.summary.baselinePrice}")
-                            Text("Spoofed Price: ${processState.summary.spoofedPrice}")
+                                Text("User Baseline: $it")
+                            } ?: Text("User Baseline: Skipped")
+                            Text("Sniffer Pass Price: ${processState.summary.snifferPrice}")
+                            processState.summary.cleanControlPrice?.let {
+                                Text("Clean Control Pass Price: $it")
+                            }
+                            Text("Spoof Pass Price: ${processState.summary.spoofedPrice}")
                             Text(
                                 "Retailer Tactics Detected: ${
                                     processState.summary.tactics.takeIf { it.isNotEmpty() }?.joinToString(", ")
                                         ?: "None"
                                 }",
                             )
+                            Text("Tactic Source Pass: ${processState.summary.tacticSourcePass}")
+                            Text("Clean Control Mode: ${processState.summary.cleanControlExecutionMode}")
+                            Text("Shadow Sampled: ${if (processState.summary.shadowSampled) "Yes" else "No"}")
                             Text("Strategy Used: ${processState.summary.strategyName}")
                             Text("Baseline Config: ${processState.summary.baselineConfig}")
                             Text("Attempted Config: ${processState.summary.attemptedConfigs.joinToString(" -> ").ifBlank { "None" }}")

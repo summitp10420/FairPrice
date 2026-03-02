@@ -31,9 +31,14 @@ import com.fairprice.app.engine.WireguardVpnEngine
 import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
+    }
+
     private val repository: FairPriceRepository by lazy {
         FairPriceRepositoryImpl(SupabaseClientProvider.client)
     }
@@ -79,6 +84,11 @@ class MainActivity : ComponentActivity() {
                         extractionEngine = extractionEngine,
                         strategyEngine = strategyEngine,
                         isAdminUser = BuildConfig.DEBUG,
+                        shadowCleanControlSampler = { inputUrl ->
+                            val normalized = inputUrl.trim().lowercase(Locale.US)
+                            val bucket = (normalized.hashCode() and Int.MAX_VALUE) % 100
+                            bucket < SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT
+                        },
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")

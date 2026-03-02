@@ -61,12 +61,16 @@ data class SummaryData(
     val lifetimePotentialSavings: String,
     val baselineConfig: String,
     val outcome: String,
-    val baselinePrice: String,
+    val snifferPrice: String,
+    val cleanControlPrice: String?,
     val spoofedPrice: String,
     val dirtyBaselinePrice: String?,
     val potentialSavings: String?,
     val isVictory: Boolean,
     val tactics: List<String>,
+    val tacticSourcePass: String,
+    val cleanControlExecutionMode: String,
+    val shadowSampled: Boolean,
     val strategyName: String,
     val vpnConfig: String,
     val attemptedConfigs: List<String>,
@@ -119,6 +123,7 @@ class HomeViewModel(
     private val shortUrlResolver: suspend (String) -> String? = { inputUrl ->
         resolveAmazonShortUrlBestEffort(inputUrl)
     },
+    private val shadowCleanControlSampler: (String) -> Boolean = { false },
 ) : ViewModel() {
     companion object {
         private const val TAG = "HomeViewModel"
@@ -133,8 +138,16 @@ class HomeViewModel(
         private const val ENGINE_VERSION = "11.5a"
         private const val ENGINE_BUILD_ID = "local-dev"
         private const val ENGINE_HASH_KEY = "fp_engine"
+        private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
         private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
-        private const val BASELINE_INTEL_TOKEN = "baseline_intel"
+        private const val SNIFFER_INTEL_TOKEN = "sniffer_intel"
+        private const val CLEAN_CONTROL_INTEL_TOKEN = "clean_control_intel"
+        private const val PHASE_SNIFFER = "sniffer"
+        private const val PHASE_CLEAN_CONTROL = "clean_control"
+        private const val PHASE_SPOOF = "spoof"
+        private const val CLEAN_CONTROL_MODE_NONE = "none"
+        private const val CLEAN_CONTROL_MODE_FALLBACK = "fallback"
+        private const val CLEAN_CONTROL_MODE_SHADOW = "shadow"
 
         private suspend fun resolveAmazonShortUrlBestEffort(inputUrl: String): String? {
             return withContext(Dispatchers.IO) {
@@ -318,6 +331,11 @@ class HomeViewModel(
             val attemptRows = mutableListOf<PriceCheckAttempt>()
             val attemptedConfigs = mutableListOf<String>()
             val diagnostics = mutableListOf<String>()
+            var snifferExtraction: ExtractionResult? = null
+            var cleanControlExtraction: ExtractionResult? = null
+            var shadowSampled = false
+            var cleanControlExecutionMode = CLEAN_CONTROL_MODE_NONE
+            var tacticSourcePass = PHASE_SNIFFER
 
             try {
                 pendingVpnContinuation = null
@@ -335,38 +353,219 @@ class HomeViewModel(
 
                 _uiState.update { current ->
                     current.copy(
-                        processState = HomeProcessState.Processing("Gathering baseline price..."),
+                        processState = HomeProcessState.Processing("Running Sniffer Pass..."),
                     )
                 }
-                var baselineResultValue: Result<ExtractionResult> =
-                    Result.failure(IllegalStateException("Baseline extraction did not run."))
-                val baselineNavigationUrl = buildBaselineIntelNavigationUrl(submittedUrl)
-                val baselineLatencyMs = measureTimeMillis {
-                    baselineResultValue = extractionEngine.loadAndExtract(baselineNavigationUrl)
+                var snifferResultValue: Result<ExtractionResult> =
+                    Result.failure(IllegalStateException("Sniffer pass did not run."))
+                val snifferNavigationUrl = buildSnifferNavigationUrl(submittedUrl)
+                val snifferLatencyMs = measureTimeMillis {
+                    snifferResultValue = extractionEngine.loadAndExtract(
+                        snifferNavigationUrl,
+                        request = ExtractionRequest(
+                            cleanSessionRequired = true,
+                            phase = PHASE_SNIFFER,
+                            strictTrackingProtection = false,
+                        ),
+                    )
                 }
-                val baselineResult = baselineResultValue
-                if (baselineResult.isFailure) {
-                    val throwable = baselineResult.exceptionOrNull()
+                val snifferResult = snifferResultValue
+                if (snifferResult.isFailure) {
+                    val throwable = snifferResult.exceptionOrNull()
                     attemptRows += buildAttemptRow(
-                        phase = "baseline",
+                        phase = PHASE_SNIFFER,
                         attemptIndex = 0,
                         vpnConfig = null,
                         success = false,
                         throwable = throwable,
                         extracted = null,
-                        latencyMs = baselineLatencyMs,
+                        latencyMs = snifferLatencyMs,
                         executionUrl = submittedUrl,
-                        appliedLevers = buildAppliedLevers(urlSanitized = false),
+                        appliedLevers = buildAppliedLevers(
+                            urlSanitized = false,
+                            amnesiaProtocol = false,
+                            trackingProtection = TRACKING_PROTECTION_OFF,
+                        ),
                     )
-                    terminalError =
-                        "Baseline extraction failed: ${throwable.toUserMessage()}. You can continue shopping normally."
-                    diagnostics += terminalError.orEmpty()
-                    Log.e(TAG, "Baseline extraction failed", throwable)
+                    diagnostics += "Sniffer Pass failed: ${throwable.toUserMessage()}"
+                    Log.e(TAG, "Sniffer pass failed", throwable)
                     _uiState.update { current ->
-                        current.copy(processState = HomeProcessState.Processing("Logging fallback result..."))
+                        current.copy(processState = HomeProcessState.Processing("Running Clean Control fallback..."))
                     }
+                    cleanControlExecutionMode = CLEAN_CONTROL_MODE_FALLBACK
+                    var cleanControlResultValue: Result<ExtractionResult> =
+                        Result.failure(IllegalStateException("Clean Control fallback did not run."))
+                    val cleanControlNavigationUrl = buildCleanControlNavigationUrl(submittedUrl)
+                    val cleanControlLatencyMs = measureTimeMillis {
+                        cleanControlResultValue = extractionEngine.loadAndExtract(
+                            cleanControlNavigationUrl,
+                            request = ExtractionRequest(
+                                cleanSessionRequired = true,
+                                phase = PHASE_CLEAN_CONTROL,
+                                strictTrackingProtection = false,
+                            ),
+                        )
+                    }
+                    val cleanControlResult = cleanControlResultValue
+                    if (cleanControlResult.isFailure) {
+                        val cleanControlThrowable = cleanControlResult.exceptionOrNull()
+                        attemptRows += buildAttemptRow(
+                            phase = PHASE_CLEAN_CONTROL,
+                            attemptIndex = 0,
+                            vpnConfig = null,
+                            success = false,
+                            throwable = cleanControlThrowable,
+                            extracted = null,
+                            latencyMs = cleanControlLatencyMs,
+                            executionUrl = submittedUrl,
+                            appliedLevers = buildAppliedLevers(
+                                urlSanitized = false,
+                                amnesiaProtocol = false,
+                                trackingProtection = TRACKING_PROTECTION_OFF,
+                            ),
+                        )
+                        terminalError = "Sniffer Pass failed and Clean Control fallback failed: ${cleanControlThrowable.toUserMessage()}. You can continue shopping manually."
+                        diagnostics += terminalError.orEmpty()
+                        val failedPreSpoofCheck = buildPriceCheck(
+                            url = submittedUrl,
+                            strategyId = null,
+                            strategyName = null,
+                            baselinePriceCents = 0,
+                            foundPriceCents = 0,
+                            extractionSuccessful = false,
+                            tactics = emptyList(),
+                            attemptedConfigs = emptyList(),
+                            finalConfig = null,
+                            retryCount = 0,
+                            outcome = "degraded_pre_spoof_failed",
+                            degraded = true,
+                            baselineSuccess = false,
+                            spoofSuccess = false,
+                            dirtyBaselinePriceCents = dirtyBaselinePriceCents,
+                            diagnostics = diagnostics,
+                            snifferPriceCents = null,
+                            cleanControlPriceCents = null,
+                            tacticSourcePass = null,
+                            cleanControlExecutionMode = cleanControlExecutionMode,
+                            shadowSampled = false,
+                        )
+                        _uiState.update { current ->
+                            current.copy(processState = HomeProcessState.Processing("Logging fallback result..."))
+                        }
+                        val fallbackLogResult = repository.logPriceCheckRun(failedPreSpoofCheck, attemptRows)
+                        if (fallbackLogResult.isFailure) {
+                            val logThrowable = fallbackLogResult.exceptionOrNull()
+                            val logMessage = "Supabase fallback log failed: ${logThrowable.toUserMessage()}"
+                            Log.e(TAG, "price_checks fallback insert failed", logThrowable)
+                            terminalError = "$terminalError | $logMessage"
+                        }
+                        finalShowBrowser = true
+                        return@launch
+                    }
+                    cleanControlExtraction = cleanControlResult.getOrThrow()
+                    attemptRows += buildAttemptRow(
+                        phase = PHASE_CLEAN_CONTROL,
+                        attemptIndex = 0,
+                        vpnConfig = null,
+                        success = true,
+                        throwable = null,
+                        extracted = cleanControlExtraction,
+                        latencyMs = cleanControlLatencyMs,
+                        executionUrl = submittedUrl,
+                        appliedLevers = buildAppliedLevers(
+                            urlSanitized = false,
+                            amnesiaProtocol = true,
+                            trackingProtection = TRACKING_PROTECTION_OFF,
+                        ),
+                    )
+                    tacticSourcePass = PHASE_CLEAN_CONTROL
+                    diagnostics += "Sniffer Pass failed. Clean Control fallback succeeded."
+                } else {
+                    snifferExtraction = snifferResult.getOrThrow()
+                    attemptRows += buildAttemptRow(
+                        phase = PHASE_SNIFFER,
+                        attemptIndex = 0,
+                        vpnConfig = null,
+                        success = true,
+                        throwable = null,
+                        extracted = snifferExtraction,
+                        latencyMs = snifferLatencyMs,
+                        executionUrl = submittedUrl,
+                        appliedLevers = buildAppliedLevers(
+                            urlSanitized = false,
+                            amnesiaProtocol = true,
+                            trackingProtection = TRACKING_PROTECTION_OFF,
+                        ),
+                    )
+                    shadowSampled = shadowCleanControlSampler(submittedUrl)
+                    if (shadowSampled) {
+                        cleanControlExecutionMode = CLEAN_CONTROL_MODE_SHADOW
+                        _uiState.update { current ->
+                            current.copy(processState = HomeProcessState.Processing("Running Clean Control shadow pass..."))
+                        }
+                        var cleanControlShadowValue: Result<ExtractionResult> =
+                            Result.failure(IllegalStateException("Clean Control shadow pass did not run."))
+                        val cleanControlNavigationUrl = buildCleanControlNavigationUrl(submittedUrl)
+                        val cleanControlShadowLatencyMs = measureTimeMillis {
+                            cleanControlShadowValue = extractionEngine.loadAndExtract(
+                                cleanControlNavigationUrl,
+                                request = ExtractionRequest(
+                                    cleanSessionRequired = true,
+                                    phase = PHASE_CLEAN_CONTROL,
+                                    strictTrackingProtection = false,
+                                ),
+                            )
+                        }
+                        val cleanControlShadowResult = cleanControlShadowValue
+                        if (cleanControlShadowResult.isSuccess) {
+                            cleanControlExtraction = cleanControlShadowResult.getOrThrow()
+                            attemptRows += buildAttemptRow(
+                                phase = PHASE_CLEAN_CONTROL,
+                                attemptIndex = 0,
+                                vpnConfig = null,
+                                success = true,
+                                throwable = null,
+                                extracted = cleanControlExtraction,
+                                latencyMs = cleanControlShadowLatencyMs,
+                                executionUrl = submittedUrl,
+                                appliedLevers = buildAppliedLevers(
+                                    urlSanitized = false,
+                                    amnesiaProtocol = true,
+                                    trackingProtection = TRACKING_PROTECTION_OFF,
+                                ),
+                            )
+                            diagnostics += "Clean Control Pass shadow telemetry captured."
+                        } else {
+                            val shadowThrowable = cleanControlShadowResult.exceptionOrNull()
+                            attemptRows += buildAttemptRow(
+                                phase = PHASE_CLEAN_CONTROL,
+                                attemptIndex = 0,
+                                vpnConfig = null,
+                                success = false,
+                                throwable = shadowThrowable,
+                                extracted = null,
+                                latencyMs = cleanControlShadowLatencyMs,
+                                executionUrl = submittedUrl,
+                                appliedLevers = buildAppliedLevers(
+                                    urlSanitized = false,
+                                    amnesiaProtocol = false,
+                                    trackingProtection = TRACKING_PROTECTION_OFF,
+                                ),
+                            )
+                            diagnostics += "Clean Control Pass shadow failed (non-terminal): ${shadowThrowable.toUserMessage()}"
+                        }
+                    }
+                }
 
-                    val fallbackPriceCheck = buildPriceCheck(
+                val tacticSourceExtraction = if (tacticSourcePass == PHASE_CLEAN_CONTROL) {
+                    cleanControlExtraction
+                } else {
+                    snifferExtraction
+                }
+                if (tacticSourceExtraction == null) {
+                    terminalError = "No successful pre-spoof pass available. You can continue shopping manually."
+                    diagnostics += terminalError.orEmpty()
+                    val failedPreSpoofCheck = buildPriceCheck(
                         url = submittedUrl,
                         strategyId = null,
                         strategyName = null,
@@ -377,37 +576,25 @@ class HomeViewModel(
                         attemptedConfigs = emptyList(),
                         finalConfig = null,
                         retryCount = 0,
-                        outcome = "degraded_baseline_failed",
+                        outcome = "degraded_pre_spoof_failed",
                         degraded = true,
                         baselineSuccess = false,
                         spoofSuccess = false,
                         dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
+                        snifferPriceCents = snifferExtraction?.priceCents,
+                        cleanControlPriceCents = cleanControlExtraction?.priceCents,
+                        tacticSourcePass = null,
+                        cleanControlExecutionMode = cleanControlExecutionMode,
+                        shadowSampled = shadowSampled,
                     )
-                    val fallbackLogResult = repository.logPriceCheckRun(fallbackPriceCheck, attemptRows)
-                    if (fallbackLogResult.isFailure) {
-                        val logThrowable = fallbackLogResult.exceptionOrNull()
-                        val logMessage =
-                            "Supabase fallback log failed: ${logThrowable.toUserMessage()}"
-                        Log.e(TAG, "price_checks fallback insert failed", logThrowable)
-                        terminalError = "$terminalError | $logMessage"
+                    val failedPreLog = repository.logPriceCheckRun(failedPreSpoofCheck, attemptRows)
+                    if (failedPreLog.isFailure) {
+                        diagnostics += "Supabase log failed: ${failedPreLog.exceptionOrNull().toUserMessage()}"
                     }
                     finalShowBrowser = true
                     return@launch
                 }
-
-                val baselineExtraction = baselineResult.getOrThrow()
-                attemptRows += buildAttemptRow(
-                    phase = "baseline",
-                    attemptIndex = 0,
-                    vpnConfig = null,
-                    success = true,
-                    throwable = null,
-                    extracted = baselineExtraction,
-                    latencyMs = baselineLatencyMs,
-                    executionUrl = submittedUrl,
-                    appliedLevers = buildAppliedLevers(urlSanitized = false),
-                )
 
                 _uiState.update { current ->
                     current.copy(processState = HomeProcessState.Processing("Determining strategy..."))
@@ -415,7 +602,7 @@ class HomeViewModel(
                 val strategy =
                     strategyEngine.determineStrategy(
                         url = submittedUrl,
-                        baselineTactics = baselineExtraction.tactics,
+                        baselineTactics = tacticSourceExtraction.tactics,
                     ).getOrElse { throwable ->
                         terminalError = "Strategy resolution failed: ${throwable.toUserMessage()}"
                         diagnostics += terminalError.orEmpty()
@@ -427,19 +614,24 @@ class HomeViewModel(
                             url = submittedUrl,
                             strategyId = null,
                             strategyName = null,
-                            baselinePriceCents = baselineExtraction.priceCents,
-                            foundPriceCents = baselineExtraction.priceCents,
+                            baselinePriceCents = tacticSourceExtraction.priceCents,
+                            foundPriceCents = tacticSourceExtraction.priceCents,
                             extractionSuccessful = false,
-                            tactics = baselineExtraction.tactics,
+                            tactics = tacticSourceExtraction.tactics,
                             attemptedConfigs = emptyList(),
                             finalConfig = null,
                             retryCount = 0,
                             outcome = "strategy_failed",
-                            degraded = false,
+                            degraded = tacticSourcePass == PHASE_CLEAN_CONTROL,
                             baselineSuccess = true,
                             spoofSuccess = false,
                             dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                             diagnostics = diagnostics,
+                            snifferPriceCents = snifferExtraction?.priceCents,
+                            cleanControlPriceCents = cleanControlExtraction?.priceCents,
+                            tacticSourcePass = tacticSourcePass,
+                            cleanControlExecutionMode = cleanControlExecutionMode,
+                            shadowSampled = shadowSampled,
                         )
                         val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
                         if (failedLogResult.isSuccess) {
@@ -485,7 +677,12 @@ class HomeViewModel(
                         is SpoofAttemptExecution.PermissionRequired -> {
                             pendingVpnContinuation = PendingVpnContinuation(
                                 submittedUrl = submittedUrl,
-                                baselineResult = baselineExtraction,
+                                preSpoofResult = tacticSourceExtraction,
+                                preSpoofTacticSourcePass = tacticSourcePass,
+                                snifferResult = snifferExtraction,
+                                cleanControlResult = cleanControlExtraction,
+                                cleanControlExecutionMode = cleanControlExecutionMode,
+                                shadowSampled = shadowSampled,
                                 strategy = strategy,
                                 dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                                 attemptIndex = attempt,
@@ -511,7 +708,7 @@ class HomeViewModel(
                         is SpoofAttemptExecution.Failure -> {
                             vpnConnectedThisRun = vpnConnectedThisRun || execution.connected
                             attemptRows += buildAttemptRow(
-                                phase = "spoof",
+                                phase = PHASE_SPOOF,
                                 attemptIndex = attemptNumber,
                                 vpnConfig = config,
                                 success = false,
@@ -530,7 +727,7 @@ class HomeViewModel(
                         is SpoofAttemptExecution.Success -> {
                             vpnConnectedThisRun = true
                             attemptRows += buildAttemptRow(
-                                phase = "spoof",
+                                phase = PHASE_SPOOF,
                                 attemptIndex = attemptNumber,
                                 vpnConfig = config,
                                 success = true,
@@ -558,10 +755,10 @@ class HomeViewModel(
                         url = submittedUrl,
                         strategyId = strategy.strategyId,
                         strategyName = strategy.strategyName,
-                        baselinePriceCents = baselineExtraction.priceCents,
-                        foundPriceCents = baselineExtraction.priceCents,
+                        baselinePriceCents = tacticSourceExtraction.priceCents,
+                        foundPriceCents = tacticSourceExtraction.priceCents,
                         extractionSuccessful = false,
-                        tactics = baselineExtraction.tactics,
+                        tactics = tacticSourceExtraction.tactics,
                         attemptedConfigs = attemptedConfigs,
                         finalConfig = finalConfig,
                         retryCount = retryCountFromAttempts(attemptRows),
@@ -571,6 +768,11 @@ class HomeViewModel(
                         spoofSuccess = false,
                         dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
+                        snifferPriceCents = snifferExtraction?.priceCents,
+                        cleanControlPriceCents = cleanControlExtraction?.priceCents,
+                        tacticSourcePass = tacticSourcePass,
+                        cleanControlExecutionMode = cleanControlExecutionMode,
+                        shadowSampled = shadowSampled,
                     )
                     _uiState.update { current ->
                         current.copy(processState = HomeProcessState.Processing("Logging run result..."))
@@ -588,19 +790,28 @@ class HomeViewModel(
                     url = submittedUrl,
                     strategyId = strategy.strategyId,
                     strategyName = strategy.strategyName,
-                    baselinePriceCents = baselineExtraction.priceCents,
+                    baselinePriceCents = tacticSourceExtraction.priceCents,
                     foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
-                    tactics = baselineExtraction.tactics,
+                    tactics = tacticSourceExtraction.tactics,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = "success",
-                    degraded = false,
+                    outcome = if (tacticSourcePass == PHASE_CLEAN_CONTROL) {
+                        "degraded_sniffer_fallback_success"
+                    } else {
+                        "success"
+                    },
+                    degraded = tacticSourcePass == PHASE_CLEAN_CONTROL,
                     baselineSuccess = true,
                     spoofSuccess = true,
                     dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
+                    snifferPriceCents = snifferExtraction?.priceCents,
+                    cleanControlPriceCents = cleanControlExtraction?.priceCents,
+                    tacticSourcePass = tacticSourcePass,
+                    cleanControlExecutionMode = cleanControlExecutionMode,
+                    shadowSampled = shadowSampled,
                 )
 
                 _uiState.update { current ->
@@ -620,7 +831,12 @@ class HomeViewModel(
                 val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
                     .getOrDefault(0)
                 successSummary = buildSuccessSummary(
-                    baselineResult = baselineExtraction,
+                    tacticSourceResult = tacticSourceExtraction,
+                    snifferResult = snifferExtraction,
+                    cleanControlResult = cleanControlExtraction,
+                    tacticSourcePass = tacticSourcePass,
+                    cleanControlExecutionMode = cleanControlExecutionMode,
+                    shadowSampled = shadowSampled,
                     spoofedResult = spoofedResult,
                     dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                     attemptedConfigs = attemptedConfigs,
@@ -628,7 +844,11 @@ class HomeViewModel(
                         "Spoof success missing final config."
                     },
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = if (runLog.attemptsInserted) "success" else "partial_log_failure",
+                    outcome = if (runLog.attemptsInserted) {
+                        priceCheck.outcome ?: "success"
+                    } else {
+                        "partial_log_failure"
+                    },
                     diagnostics = diagnostics,
                     lifetimePotentialSavingsCents = lifetimeSavingsCents,
                     strategyName = strategy.strategyName,
@@ -673,7 +893,7 @@ class HomeViewModel(
             val attemptRows = pending.attemptRows.toMutableList().apply {
                 add(
                     buildAttemptRow(
-                        phase = "spoof",
+                        phase = PHASE_SPOOF,
                         attemptIndex = pending.attemptIndex + 1,
                         vpnConfig = pending.waitingConfig,
                         success = false,
@@ -697,10 +917,10 @@ class HomeViewModel(
                     url = pending.submittedUrl,
                     strategyId = pending.strategy.strategyId,
                     strategyName = pending.strategy.strategyName,
-                    baselinePriceCents = pending.baselineResult.priceCents,
-                    foundPriceCents = pending.baselineResult.priceCents,
+                    baselinePriceCents = pending.preSpoofResult.priceCents,
+                    foundPriceCents = pending.preSpoofResult.priceCents,
                     extractionSuccessful = false,
-                    tactics = pending.baselineResult.tactics,
+                    tactics = pending.preSpoofResult.tactics,
                     attemptedConfigs = pending.attemptedConfigs,
                     finalConfig = null,
                     retryCount = retryCountFromAttempts(attemptRows),
@@ -710,6 +930,11 @@ class HomeViewModel(
                     spoofSuccess = false,
                     dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
+                    snifferPriceCents = pending.snifferResult?.priceCents,
+                    cleanControlPriceCents = pending.cleanControlResult?.priceCents,
+                    tacticSourcePass = pending.preSpoofTacticSourcePass,
+                    cleanControlExecutionMode = pending.cleanControlExecutionMode,
+                    shadowSampled = pending.shadowSampled,
                 )
                 val deniedLogResult = repository.logPriceCheckRun(deniedPriceCheck, attemptRows)
                 if (deniedLogResult.isSuccess) {
@@ -790,7 +1015,7 @@ class HomeViewModel(
                         is SpoofAttemptExecution.Failure -> {
                             vpnConnectedThisRun = vpnConnectedThisRun || execution.connected
                             attemptRows += buildAttemptRow(
-                                phase = "spoof",
+                                phase = PHASE_SPOOF,
                                 attemptIndex = attemptNumber,
                                 vpnConfig = config,
                                 success = false,
@@ -806,7 +1031,7 @@ class HomeViewModel(
                         is SpoofAttemptExecution.Success -> {
                             vpnConnectedThisRun = true
                             attemptRows += buildAttemptRow(
-                                phase = "spoof",
+                                phase = PHASE_SPOOF,
                                 attemptIndex = attemptNumber,
                                 vpnConfig = config,
                                 success = true,
@@ -834,10 +1059,10 @@ class HomeViewModel(
                         url = pending.submittedUrl,
                         strategyId = pending.strategy.strategyId,
                         strategyName = pending.strategy.strategyName,
-                        baselinePriceCents = pending.baselineResult.priceCents,
-                        foundPriceCents = pending.baselineResult.priceCents,
+                        baselinePriceCents = pending.preSpoofResult.priceCents,
+                        foundPriceCents = pending.preSpoofResult.priceCents,
                         extractionSuccessful = false,
-                        tactics = pending.baselineResult.tactics,
+                        tactics = pending.preSpoofResult.tactics,
                         attemptedConfigs = attemptedConfigs,
                         finalConfig = finalConfig,
                         retryCount = retryCountFromAttempts(attemptRows),
@@ -847,6 +1072,11 @@ class HomeViewModel(
                         spoofSuccess = false,
                         dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                         diagnostics = diagnostics,
+                        snifferPriceCents = pending.snifferResult?.priceCents,
+                        cleanControlPriceCents = pending.cleanControlResult?.priceCents,
+                        tacticSourcePass = pending.preSpoofTacticSourcePass,
+                        cleanControlExecutionMode = pending.cleanControlExecutionMode,
+                        shadowSampled = pending.shadowSampled,
                     )
                     val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
                     if (failedLogResult.isSuccess) {
@@ -859,19 +1089,28 @@ class HomeViewModel(
                     url = pending.submittedUrl,
                     strategyId = pending.strategy.strategyId,
                     strategyName = pending.strategy.strategyName,
-                    baselinePriceCents = pending.baselineResult.priceCents,
+                    baselinePriceCents = pending.preSpoofResult.priceCents,
                     foundPriceCents = spoofedResult.priceCents,
                     extractionSuccessful = true,
-                    tactics = pending.baselineResult.tactics,
+                    tactics = pending.preSpoofResult.tactics,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = "success",
-                    degraded = false,
+                    outcome = if (pending.preSpoofTacticSourcePass == PHASE_CLEAN_CONTROL) {
+                        "degraded_sniffer_fallback_success"
+                    } else {
+                        "success"
+                    },
+                    degraded = pending.preSpoofTacticSourcePass == PHASE_CLEAN_CONTROL,
                     baselineSuccess = true,
                     spoofSuccess = true,
                     dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     diagnostics = diagnostics,
+                    snifferPriceCents = pending.snifferResult?.priceCents,
+                    cleanControlPriceCents = pending.cleanControlResult?.priceCents,
+                    tacticSourcePass = pending.preSpoofTacticSourcePass,
+                    cleanControlExecutionMode = pending.cleanControlExecutionMode,
+                    shadowSampled = pending.shadowSampled,
                 )
 
                 _uiState.update { current ->
@@ -890,13 +1129,22 @@ class HomeViewModel(
                 val lifetimeSavingsCents = repository.fetchLifetimePotentialSavingsCents()
                     .getOrDefault(0)
                 successSummary = buildSuccessSummary(
-                    baselineResult = pending.baselineResult,
+                    tacticSourceResult = pending.preSpoofResult,
+                    snifferResult = pending.snifferResult,
+                    cleanControlResult = pending.cleanControlResult,
+                    tacticSourcePass = pending.preSpoofTacticSourcePass,
+                    cleanControlExecutionMode = pending.cleanControlExecutionMode,
+                    shadowSampled = pending.shadowSampled,
                     spoofedResult = spoofedResult,
                     dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
                     attemptedConfigs = attemptedConfigs,
                     finalConfig = finalConfig ?: pending.waitingConfig,
                     retryCount = retryCountFromAttempts(attemptRows),
-                    outcome = if (runLog.attemptsInserted) "success" else "partial_log_failure",
+                    outcome = if (runLog.attemptsInserted) {
+                        priceCheck.outcome ?: "success"
+                    } else {
+                        "partial_log_failure"
+                    },
                     diagnostics = diagnostics,
                     lifetimePotentialSavingsCents = lifetimeSavingsCents,
                     strategyName = pending.strategy.strategyName,
@@ -1063,7 +1311,7 @@ class HomeViewModel(
                 navigationUrl,
                 request = ExtractionRequest(
                     cleanSessionRequired = true,
-                    phase = "spoof",
+                    phase = PHASE_SPOOF,
                     strictTrackingProtection = strictTrackingProtection,
                 ),
             )
@@ -1158,6 +1406,11 @@ class HomeViewModel(
         spoofSuccess: Boolean,
         dirtyBaselinePriceCents: Int?,
         diagnostics: List<String>,
+        snifferPriceCents: Int?,
+        cleanControlPriceCents: Int?,
+        tacticSourcePass: String?,
+        cleanControlExecutionMode: String,
+        shadowSampled: Boolean,
     ): PriceCheck {
         val domain = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
         return PriceCheck(
@@ -1187,6 +1440,11 @@ class HomeViewModel(
                     "diagnostics",
                     JsonArray(diagnostics.map { JsonPrimitive(it) }),
                 )
+                snifferPriceCents?.let { put("sniffer_price_cents", JsonPrimitive(it)) }
+                cleanControlPriceCents?.let { put("clean_control_price_cents", JsonPrimitive(it)) }
+                tacticSourcePass?.let { put("tactic_source_pass", JsonPrimitive(it)) }
+                put("clean_control_execution_mode", JsonPrimitive(cleanControlExecutionMode))
+                put("shadow_sampled", JsonPrimitive(shadowSampled))
             },
         )
     }
@@ -1253,7 +1511,7 @@ class HomeViewModel(
     }
 
     private fun retryCountFromAttempts(attemptRows: List<PriceCheckAttempt>): Int {
-        val spoofAttempts = attemptRows.count { it.phase == "spoof" }
+        val spoofAttempts = attemptRows.count { it.phase == PHASE_SPOOF }
         return (spoofAttempts - 1).coerceAtLeast(0)
     }
 
@@ -1329,10 +1587,12 @@ class HomeViewModel(
         return appendEngineBootstrapToken(executionUrl, profile.toTelemetryValue())
     }
 
-    private fun buildBaselineIntelNavigationUrl(
-        executionUrl: String,
-    ): String {
-        return appendEngineBootstrapToken(executionUrl, BASELINE_INTEL_TOKEN)
+    private fun buildSnifferNavigationUrl(executionUrl: String): String {
+        return appendEngineBootstrapToken(executionUrl, SNIFFER_INTEL_TOKEN)
+    }
+
+    private fun buildCleanControlNavigationUrl(executionUrl: String): String {
+        return appendEngineBootstrapToken(executionUrl, CLEAN_CONTROL_INTEL_TOKEN)
     }
 
     private fun appendEngineBootstrapToken(
@@ -1356,6 +1616,12 @@ class HomeViewModel(
             .toMutableList()
         hashParts += "$ENGINE_HASH_KEY=$tokenValue"
         return "$base#${hashParts.joinToString("&")}"
+    }
+
+    private fun shouldRunShadowCleanControl(url: String): Boolean {
+        val normalized = url.trim().lowercase(Locale.US)
+        val bucket = (normalized.hashCode() and Int.MAX_VALUE) % 100
+        return bucket < SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT
     }
 
     private suspend fun ensureBaselineVpnActive(): String? {
@@ -1431,7 +1697,12 @@ class HomeViewModel(
     }
 
     private fun buildSuccessSummary(
-        baselineResult: ExtractionResult,
+        tacticSourceResult: ExtractionResult,
+        snifferResult: ExtractionResult?,
+        cleanControlResult: ExtractionResult?,
+        tacticSourcePass: String,
+        cleanControlExecutionMode: String,
+        shadowSampled: Boolean,
         spoofedResult: ExtractionResult,
         dirtyBaselinePriceCents: Int?,
         attemptedConfigs: List<String>,
@@ -1442,7 +1713,8 @@ class HomeViewModel(
         lifetimePotentialSavingsCents: Int,
         strategyName: String,
     ): SummaryData {
-        val baseline = formatUsd(baselineResult.priceCents)
+        val snifferPrice = snifferResult?.priceCents?.let(::formatUsd) ?: "N/A"
+        val cleanControlPrice = cleanControlResult?.priceCents?.let(::formatUsd)
         val spoofed = formatUsd(spoofedResult.priceCents)
         val potentialSavingsCents = dirtyBaselinePriceCents?.minus(spoofedResult.priceCents)
         val isVictory = (potentialSavingsCents ?: 0) > 0
@@ -1454,12 +1726,16 @@ class HomeViewModel(
             lifetimePotentialSavings = formatUsd(lifetimePotentialSavingsCents),
             baselineConfig = baselineDisplay,
             outcome = outcome,
-            baselinePrice = baseline,
+            snifferPrice = snifferPrice,
+            cleanControlPrice = cleanControlPrice,
             spoofedPrice = spoofed,
             dirtyBaselinePrice = dirtyBaselinePriceCents?.let(::formatUsd),
             potentialSavings = potentialSavingsCents?.takeIf { it > 0 }?.let(::formatUsd),
             isVictory = isVictory,
-            tactics = baselineResult.tactics,
+            tactics = tacticSourceResult.tactics,
+            tacticSourcePass = tacticSourcePass,
+            cleanControlExecutionMode = cleanControlExecutionMode,
+            shadowSampled = shadowSampled,
             strategyName = strategyName,
             vpnConfig = deployedConfigDisplay,
             attemptedConfigs = attemptedDisplay,
@@ -1495,7 +1771,12 @@ class HomeViewModel(
 
     private data class PendingVpnContinuation(
         val submittedUrl: String,
-        val baselineResult: ExtractionResult,
+        val preSpoofResult: ExtractionResult,
+        val preSpoofTacticSourcePass: String,
+        val snifferResult: ExtractionResult?,
+        val cleanControlResult: ExtractionResult?,
+        val cleanControlExecutionMode: String,
+        val shadowSampled: Boolean,
         val strategy: StrategyResult,
         val dirtyBaselinePriceCents: Int?,
         val attemptIndex: Int,

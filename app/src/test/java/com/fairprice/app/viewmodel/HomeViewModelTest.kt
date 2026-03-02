@@ -182,7 +182,8 @@ class HomeViewModelTest {
         val processState = viewModel.uiState.value.processState
         assertTrue(processState is HomeProcessState.Success)
         val summary = (processState as HomeProcessState.Success).summary
-        assertEquals("$19.99", summary.baselinePrice)
+        assertEquals("$19.99", summary.snifferPrice)
+        assertEquals(null, summary.cleanControlPrice)
         assertEquals("$12.99", summary.spoofedPrice)
         assertEquals(null, summary.dirtyBaselinePrice)
         assertEquals(null, summary.potentialSavings)
@@ -197,7 +198,7 @@ class HomeViewModelTest {
         assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
         assertEquals(
             listOf(
-                "https://example.com/p/123#fp_engine=baseline_intel",
+                "https://example.com/p/123#fp_engine=sniffer_intel",
                 "https://example.com/p/123#fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
@@ -235,7 +236,7 @@ class HomeViewModelTest {
         assertEquals(canonicalUrl, strategyEngine.lastUrl)
         assertEquals(
             listOf(
-                "$canonicalUrl#fp_engine=baseline_intel",
+                "$canonicalUrl#fp_engine=sniffer_intel",
                 "$canonicalUrl#fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
@@ -274,7 +275,7 @@ class HomeViewModelTest {
         assertEquals(originalShortUrl, strategyEngine.lastUrl)
         assertEquals(
             listOf(
-                "$originalShortUrl#fp_engine=baseline_intel",
+                "$originalShortUrl#fp_engine=sniffer_intel",
                 "$originalShortUrl#fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
@@ -312,7 +313,7 @@ class HomeViewModelTest {
 
         assertEquals(
             listOf(
-                "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details&fp_engine=baseline_intel",
+                "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details&fp_engine=sniffer_intel",
                 "https://example.com/p/123?sku=99#details&fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
@@ -384,7 +385,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf("$inputUrl#fp_engine=baseline_intel", "$inputUrl#fp_engine=yale_smart"),
+            listOf("$inputUrl#fp_engine=sniffer_intel", "$inputUrl#fp_engine=yale_smart"),
             extractionEngine.loadedUrls,
         )
         val attempts = repository.lastLoggedAttempts
@@ -441,7 +442,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf("$inputUrl#fp_engine=baseline_intel", "$inputUrl#fp_engine=clean_control_v1"),
+            listOf("$inputUrl#fp_engine=sniffer_intel", "$inputUrl#fp_engine=clean_control_v1"),
             extractionEngine.loadedUrls,
         )
         val spoofRequest = extractionEngine.requests[1]
@@ -745,11 +746,12 @@ class HomeViewModelTest {
         assertEquals(0, strategyEngine.determineCalls)
         assertEquals(0, vpnEngine.connectCalls)
         assertEquals(0, vpnEngine.disconnectCalls)
-        assertEquals(1, extractionEngine.loadCalls)
+        assertEquals(2, extractionEngine.loadCalls)
         assertEquals(1, repository.logCalls)
         assertEquals(false, repository.lastLoggedPriceCheck?.extractionSuccessful)
         assertEquals(0, repository.lastLoggedPriceCheck?.baselinePriceCents)
         assertEquals(0, repository.lastLoggedPriceCheck?.foundPriceCents)
+        assertEquals("degraded_pre_spoof_failed", repository.lastLoggedPriceCheck?.outcome)
         val persistedTactics =
             repository.lastLoggedPriceCheck?.rawExtractionData
                 ?.get("detected_tactics")
@@ -759,7 +761,84 @@ class HomeViewModelTest {
         assertTrue(viewModel.uiState.value.showBrowser)
         val processState = viewModel.uiState.value.processState
         assertTrue(processState is HomeProcessState.Error)
-        assertTrue((processState as HomeProcessState.Error).message.contains("continue shopping normally"))
+        assertTrue((processState as HomeProcessState.Error).message.contains("Sniffer Pass failed"))
+    }
+
+    @Test
+    fun snifferFail_cleanControlFallback_success_thenSpoof_success_degradedButNotFailed() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.failure(IllegalStateException("sniffer blocked")),
+                Result.success(ExtractionResult(priceCents = 2050, tactics = listOf("challenge_wall"))),
+                Result.success(ExtractionResult(priceCents = 1800, tactics = listOf("challenge_wall"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = "s_fallback", wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shadowCleanControlSampler = { false },
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(listOf("sniffer", "clean_control", "spoof"), repository.lastLoggedAttempts.map { it.phase })
+        assertEquals("degraded_sniffer_fallback_success", repository.lastLoggedPriceCheck?.outcome)
+        assertEquals(true, repository.lastLoggedPriceCheck?.extractionSuccessful)
+        val tacticSource =
+            repository.lastLoggedPriceCheck?.rawExtractionData?.get("tactic_source_pass")?.jsonPrimitive?.content
+        assertEquals("clean_control", tacticSource)
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
+    fun snifferSuccess_shadowSampled_runsCleanControlTelemetry_onlySingleSpoofChain() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2500, tactics = listOf("cookie_tracking"))),
+                Result.success(ExtractionResult(priceCents = 2450, tactics = listOf("control_signal"))),
+                Result.success(ExtractionResult(priceCents = 1900, tactics = listOf("cookie_tracking"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = "s_shadow", wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shadowCleanControlSampler = { true },
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(1, vpnEngine.connectCalls)
+        assertEquals(listOf("sniffer", "clean_control", "spoof"), repository.lastLoggedAttempts.map { it.phase })
+        val summary = (viewModel.uiState.value.processState as HomeProcessState.Success).summary
+        assertEquals("sniffer", summary.tacticSourcePass)
+        assertEquals("shadow", summary.cleanControlExecutionMode)
+        assertEquals(true, summary.shadowSampled)
+        assertEquals("$25.00", summary.snifferPrice)
+        assertEquals("$24.50", summary.cleanControlPrice)
     }
 
     @Test
@@ -892,7 +971,7 @@ class HomeViewModelTest {
         assertEquals(2, extractionEngine.loadCalls)
         val baselineRequest = extractionEngine.requests[0]
         val spoofRequest = extractionEngine.requests[1]
-        assertEquals(false, baselineRequest.cleanSessionRequired)
+        assertEquals(true, baselineRequest.cleanSessionRequired)
         assertEquals(false, baselineRequest.strictTrackingProtection)
         assertEquals(true, spoofRequest.cleanSessionRequired)
         assertEquals(true, spoofRequest.strictTrackingProtection)

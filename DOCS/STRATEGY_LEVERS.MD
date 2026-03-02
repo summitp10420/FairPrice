@@ -1,4 +1,4 @@
-Last Updated: 2026-02-26
+Last Updated: 2026-03-02
 Owner: FairPrice product/engineering
 Status: Living document (update every phase)
 
@@ -154,7 +154,7 @@ Policy knobs:
 
 Key telemetry:
 - Extraction path used.
-- Baseline vs spoof extraction success.
+- Sniffer vs clean-control vs spoof extraction success.
 - Tactic detection frequency.
 
 3.6 URL Canonicalization Lever
@@ -178,7 +178,7 @@ Policy knobs:
 
 Key telemetry:
 - Canonicalization success rate.
-- Baseline extraction lift from canonicalized URLs.
+- Sniffer extraction lift from canonicalized URLs.
 
 3.7 User Input & Comparison Lever
 What it controls:
@@ -213,6 +213,7 @@ Approaches:
 - Continue browsing with clear error state.
 - Log fallback telemetry and keep flow usable.
 - Preserve user agency over blocking failures.
+- Use sampled shadow clean-control (20% beta) for counterfactual telemetry without adding a second spoof chain.
 
 Actions:
 - Create degraded `PriceCheck`.
@@ -225,7 +226,7 @@ Policy knobs:
 
 Key telemetry:
 - Degraded run rate.
-- Primary failure stage (baseline, connect, spoof, logging).
+- Primary failure stage (sniffer, clean_control, connect, spoof, logging).
 
 3.9 Telemetry Granularity Lever
 What it controls:
@@ -240,6 +241,7 @@ Actions:
 - Persist summary outcome.
 - Persist attempt rows with phase/error/latency.
 - Maintain schema backward compatibility fallback.
+- Persist pass provenance (`tactic_source_pass`, clean-control execution mode, shadow sampled flag).
 
 Policy knobs:
 - Required vs optional fields.
@@ -250,6 +252,7 @@ Key telemetry:
 - Insert success/failure.
 - Data completeness by run.
 - Coverage of lever variables in logs.
+- Counterfactual coverage from sampled clean-control shadow runs.
 
 3.10 Security & Secret Hygiene Lever
 What it controls:

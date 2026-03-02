@@ -16,6 +16,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 data class RunLogResult(
     val attemptsInserted: Boolean,
@@ -171,12 +172,13 @@ class FairPriceRepositoryImpl(
 
             val tactics = extractDetectedTactics(priceCheck)
             if (tactics.isEmpty()) return@runCatching Unit
+            val sourcePhase = extractTacticSourcePass(priceCheck)
             val strategyRows = tactics.map { tactic ->
                 RetailerStrategyRow(
                     retailerDomain = priceCheck.domain,
                     tactic = tactic,
                     observedAt = now,
-                    sourcePhase = "baseline",
+                    sourcePhase = sourcePhase,
                 )
             }
             supabaseClient.postgrest["retailer_strategies"].insert(strategyRows)
@@ -217,6 +219,14 @@ class FairPriceRepositoryImpl(
     private fun extractDetectedTactics(priceCheck: PriceCheck): List<String> {
         val value = priceCheck.rawExtractionData["detected_tactics"] as? JsonArray ?: return emptyList()
         return value.mapNotNull { (it as? JsonPrimitive)?.content?.trim()?.takeIf(String::isNotEmpty) }
+    }
+
+    private fun extractTacticSourcePass(priceCheck: PriceCheck): String {
+        val raw = (priceCheck.rawExtractionData["tactic_source_pass"] as? JsonPrimitive)?.contentOrNull
+            ?.trim()
+            .orEmpty()
+        if (raw.isNotBlank()) return raw
+        return "sniffer"
     }
 
     private suspend fun updateRetailerRecency(

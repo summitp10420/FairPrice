@@ -1,5 +1,5 @@
-Last Updated: 2026-02-27
-Current Phase: Phase 6 complete (summary-first UX + graceful degradation); ready for Phase 7 engine hardening.
+Last Updated: 2026-03-02
+Current Phase: Phase 12 pass architecture update (sniffer + clean-control fallback + single spoof chain) in beta shadow-sampling.
 
 1. Project Overview & Objective
 FairPrice is an Android application designed to defeat dynamic and personalized pricing strategies employed by online retailers (referencing tactics outlined in the Jan 2025 FTC report).
@@ -38,26 +38,32 @@ Cursor must strictly adhere to the following data flow for a price check:
 
 Ingestion: User shares a URL via the Android Share Sheet or pastes it directly into the app.
 
-Baseline Extraction (Clear-Net): The app performs a first extraction pass without VPN and captures `ExtractionResult(priceCents, tactics)` from Gecko/WebExtension.
+User Baseline Input (Manual): The user may enter a manual reference price. This input is optional and is not an extraction pass.
 
-Strategy & Routing: The app determines routing via a dedicated pricing strategy module. `PricingStrategyEngine` resolves a strategy result from `(url, baselineTactics)`. During the current stub phase, `strategyId` may be null. The ViewModel must orchestrate this step without hardcoding strategy/config values. The resolved WireGuard config is then used to establish the tunnel via a Foreground Service.
+Sniffer Pass (Pre-spoof, clean session): The app performs a first extraction pass without VPN to capture `ExtractionResult(priceCents, tactics)` from Gecko/WebExtension.
 
-Execution + Spoofed Extraction: GeckoSession loads the URL through the active VPN tunnel and performs a second extraction pass to capture spoofed price data.
+Clean Control Pass (Fallback): If sniffer fails (timeout/challenge/extraction failure), the app performs a clean-session clean-control extraction pass. If both sniffer and clean-control fail, the run degrades terminally without spoof.
+
+Beta Shadow Sampling (Telemetry-only): When sniffer succeeds, a 20% sampled shadow clean-control pass may run for counterfactual telemetry. Shadow pass does not trigger an additional spoof chain.
+
+Strategy & Routing: `PricingStrategyEngine` resolves a strategy result from `(url, preSpoofTactics)` where tactics come from the selected tactic-source pass (prefer sniffer when successful, otherwise fallback clean-control). During stub phases, `strategyId` may be null.
+
+Execution + Spoofed Extraction: GeckoSession loads the URL through the active VPN tunnel and performs spoof extraction through a single bounded spoof chain.
 
 Extraction Payload Contract: A JavaScript WebExtension running inside GeckoView extracts DOM data and passes a JSON payload via GeckoSession.MessageDelegate with at least `{ type, priceCents, detectedTactics[] }`. Triggering must be event/DOM driven (not fixed-time delay), resilient to latency, and send once per page load.
 
-Comparison & Presentation: The app compares baseline and spoofed prices and first presents a summary card (baseline, spoofed, detected tactics, strategy label). The user explicitly enters Shopping Mode via a checkout action. Browser visibility is controlled by `showBrowser`.
+Comparison & Presentation: The app presents a summary card with explicit pass labels (User Baseline, Sniffer Pass, optional Clean Control Pass, Spoof Pass), detected tactics, strategy label, and tactic-source provenance. Browser visibility is controlled by `showBrowser`.
 
 Shopping Mode Lifecycle: In Shopping Mode, the app keeps the existing VPN/session active and does not force a reconnect/reload. A non-destructive “Back to App” action hides browser content without disconnecting VPN. An explicit “Done/Close” action disconnects VPN, resets UI state, and clears URL input for the next run.
 
-Graceful Degradation: If baseline extraction fails, the app logs a fallback `price_check` (`extraction_successful = false`, zeroed prices, empty tactics payload), surfaces clear-net browsing, and shows a non-blocking error message so the user is not stranded.
+Graceful Degradation: If sniffer fails, clean-control fallback is attempted. If fallback fails, the app logs degraded terminal telemetry, surfaces clear-net browsing, and shows a non-blocking error message so the user is not stranded. If fallback succeeds and spoof succeeds, run outcome is degraded-success (not full failure).
 
-Telemetry: The app asynchronously logs session data (including baseline price, spoofed price, applied strategy ID when available, and extraction metadata/tactics) to Supabase through the repository layer. Railway remains a future/optional middleware path for heavier telemetry processing.
+Telemetry: The app logs per-pass attempt rows with explicit pass identities (`sniffer`, `clean_control`, `spoof`) and summary provenance (`tactic_source_pass`, clean-control execution mode, shadow sampled). Legacy fields remain for compatibility.
 
 3.1 Current Modular Engine Boundaries
 - Strategy Module: `PricingStrategyEngine` defines strategy selection as a pure Kotlin/domain-like seam. `DefaultPricingStrategyEngine` is the current stub implementation and can be replaced without changing UI orchestration flow.
 - Extraction Module: `ExtractionEngine` returns structured `ExtractionResult` and remains the boundary between WebExtension payload parsing and ViewModel orchestration.
-- Orchestration Boundary: `HomeViewModel` coordinates baseline extraction -> strategy -> VPN -> spoofed extraction -> persistence -> shopping mode, but does not own strategy or extraction internals.
+- Orchestration Boundary: `HomeViewModel` coordinates sniffer -> optional clean-control (fallback or shadow) -> strategy -> VPN spoof chain -> persistence -> shopping mode, but does not own strategy or extraction internals.
 - Composition Root: `MainActivity` wires concrete engine implementations into `HomeViewModel` via dependency injection (ViewModel factory).
 - Persistence Contract: Successful price checks must persist baseline and spoofed prices. `strategyId` should be persisted when available and remains nullable during stub strategy phases.
 - UX Contract: Successful checks must show summary-first and only reveal Gecko shopping content after explicit user action.
@@ -84,7 +90,7 @@ Decoupled Extraction: Do not attempt synchronous DOM scraping. Use the WebExtens
 
 Decoupled Strategy Resolution: Do not hardcode VPN strategy IDs or WireGuard configs in ViewModels. Strategy/config resolution must remain behind `PricingStrategyEngine`.
 
-Two-Pass Integrity: Price checks must run baseline extraction before VPN strategy application, then spoofed extraction after VPN connect. Avoid collapsing back into a single-pass flow.
+Multi-Pass Integrity: Price checks must run sniffer extraction before VPN strategy application, optional clean-control fallback/shadow under bounded policy, then spoofed extraction after VPN connect. Avoid unbounded extra pulls and duplicate spoof chains.
 
 Shopping Session Continuity: After a successful spoofed pass, preserve the existing VPN/session for checkout. Do not reconnect/reload post-success unless explicitly required by user action.
 
