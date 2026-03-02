@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
                         vpnRotationEngine = vpnRotationEngine,
                         extractionEngine = extractionEngine,
                         strategyEngine = strategyEngine,
+                        isAdminUser = BuildConfig.DEBUG,
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
@@ -118,6 +119,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onSetBaselineConfigClicked = homeViewModel::onSetBaselineConfigClicked,
                             onToggleUserConfigEnabled = homeViewModel::onToggleUserConfigEnabled,
+                            onAdminEngineOverrideChanged = homeViewModel::onEngineOverrideChanged,
                             onEnterShoppingMode = homeViewModel::onEnterShoppingMode,
                             onBackToApp = homeViewModel::onBackToApp,
                             onCloseShoppingSession = homeViewModel::onCloseShoppingSession,

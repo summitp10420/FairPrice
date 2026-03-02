@@ -7,3 +7,5 @@
 .externalNativeBuild/
 .cxx/
 app/build/
+# Ignore WireGuard configs containing private keys
+app/src/main/assets/vpn/*.conf

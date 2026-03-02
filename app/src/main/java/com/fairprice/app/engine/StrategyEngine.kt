@@ -1,8 +1,14 @@
 package com.fairprice.app.engine
 
+enum class EngineProfile {
+    LEGACY,
+    YALE_SMART,
+}
+
 data class StrategyResult(
     val strategyId: String?,
-    val wireguardConfig: String,
+    val wireguardConfig: String = "",
+    val engineProfile: EngineProfile = EngineProfile.YALE_SMART,
 )
 
 interface PricingStrategyEngine {
@@ -14,7 +20,8 @@ class DefaultPricingStrategyEngine : PricingStrategyEngine {
         return Result.success(
             StrategyResult(
                 strategyId = null,
-                wireguardConfig = "Captivemarket_co-US-CO-254.conf",
+                wireguardConfig = "",
+                engineProfile = EngineProfile.YALE_SMART,
             ),
         )
     }

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.input.KeyboardType
+import com.fairprice.app.viewmodel.EngineOverride
 import com.fairprice.app.viewmodel.HomeProcessState
 import com.fairprice.app.viewmodel.HomeUiState
 import kotlin.math.roundToInt
@@ -61,6 +62,7 @@ fun HomeScreen(
     onImportVpnConfigClicked: () -> Unit,
     onSetBaselineConfigClicked: (String) -> Unit,
     onToggleUserConfigEnabled: (String, Boolean) -> Unit,
+    onAdminEngineOverrideChanged: (EngineOverride) -> Unit,
     onEnterShoppingMode: () -> Unit,
     onBackToApp: () -> Unit,
     onCloseShoppingSession: () -> Unit,
@@ -209,6 +211,41 @@ fun HomeScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
+                    }
+                }
+            }
+            if (activePane == HomePrimaryPane.CONFIG_MANAGEMENT && uiState.isAdmin) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Admin Engine Override",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.AUTO) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.AUTO,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Auto")
+                    }
+                    OutlinedButton(
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_LEGACY) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_LEGACY,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Legacy")
+                    }
+                    OutlinedButton(
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_YALE_SMART) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_YALE_SMART,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Yale-Smart")
                     }
                 }
             }

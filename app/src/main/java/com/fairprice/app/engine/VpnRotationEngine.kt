@@ -17,8 +17,7 @@ class AssetVpnRotationEngine(
     private val nowMs: () -> Long = { System.currentTimeMillis() },
     discoveredConfigsOverride: List<String>? = null,
 ) : VpnRotationEngine {
-    private val staticAssetConfigs: List<String>? = discoveredConfigsOverride
-    private val appContext: Context = context.applicationContext
+    private val importedConfigsOverride: List<String>? = discoveredConfigsOverride
     private val healthByConfig: MutableMap<String, ConfigHealth> = mutableMapOf()
     private var nextIndex: Int = 0
 
@@ -61,7 +60,7 @@ class AssetVpnRotationEngine(
     }
 
     private fun currentConfigs(): List<String> {
-        val assets = (staticAssetConfigs ?: discoverConfigs(appContext)).sorted()
+        val importedOverride = importedConfigsOverride?.sorted().orEmpty()
         val imported = vpnConfigStore?.listEnabledUserConfigs().orEmpty()
         val protonImported = imported
             .filter { it.providerHint?.equals("proton", ignoreCase = true) == true }
@@ -72,16 +71,9 @@ class AssetVpnRotationEngine(
             .map { it.id }
             .sorted()
 
-        return (protonImported + otherImported + assets)
+        return (protonImported + otherImported + importedOverride)
             .distinct()
             .filterNot { it in blockedConfigs }
-    }
-
-    private fun discoverConfigs(context: Context): List<String> {
-        val files = context.assets.list("vpn").orEmpty().asList()
-        return files
-            .filter { it.endsWith(".conf", ignoreCase = true) }
-            .sorted()
     }
 
     private data class ConfigHealth(

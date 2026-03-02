@@ -11,6 +11,7 @@ import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.CleanSessionPreparationException
+import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.engine.VpnEngine
@@ -49,6 +50,12 @@ sealed interface HomeProcessState {
     data class Error(val message: String) : HomeProcessState
 }
 
+enum class EngineOverride {
+    AUTO,
+    FORCE_LEGACY,
+    FORCE_YALE_SMART,
+}
+
 data class SummaryData(
     val lifetimePotentialSavings: String,
     val baselineConfig: String,
@@ -76,6 +83,8 @@ data class HomeUiState(
     val showBrowser: Boolean = false,
     val userVpnConfigs: List<VpnConfigRecord> = emptyList(),
     val baselineConfigId: String? = null,
+    val isAdmin: Boolean = false,
+    val adminEngineOverride: EngineOverride = EngineOverride.AUTO,
 )
 
 class HomeViewModel(
@@ -105,6 +114,7 @@ class HomeViewModel(
     },
     private val extractionEngine: ExtractionEngine,
     private val strategyEngine: PricingStrategyEngine,
+    private val isAdminUser: Boolean = false,
     private val shortUrlResolver: suspend (String) -> String? = { inputUrl ->
         resolveAmazonShortUrlBestEffort(inputUrl)
     },
@@ -113,13 +123,16 @@ class HomeViewModel(
         private const val TAG = "HomeViewModel"
         private const val VPN_STABILIZATION_DELAY_MS = 2_000L
         private const val SPOOF_ATTEMPT_MAX = 2
-        private const val BASELINE_VPN_CONFIG = "baseline_saltlake_ut-US-UT-137.conf"
         private const val DEFAULT_STRATEGY_NAME = "Default Strategy (stub)"
         private const val USER_CONFIG_PREFIX = "user:"
         private const val URL_RESOLVE_CONNECT_TIMEOUT_MS = 5_000
         private const val URL_RESOLVE_READ_TIMEOUT_MS = 5_000
         private val TRACKING_QUERY_PARAM_KEYS = setOf("gclid", "fbclid", "ref")
         private const val TRACKING_PROTECTION_STRICT = "strict"
+        private const val TRACKING_PROTECTION_OFF = "off"
+        private const val ENGINE_VERSION = "11.5a"
+        private const val ENGINE_BUILD_ID = "local-dev"
+        private const val ENGINE_HASH_KEY = "fp_engine"
 
         private suspend fun resolveAmazonShortUrlBestEffort(inputUrl: String): String? {
             return withContext(Dispatchers.IO) {
@@ -196,6 +209,9 @@ class HomeViewModel(
     private var activeVpnConfig: String? = null
 
     init {
+        _uiState.update { current ->
+            current.copy(isAdmin = isAdminUser)
+        }
         viewModelScope.launch {
             extractionEngine.currentSession.collect { session ->
                 _uiState.update { current ->
@@ -269,6 +285,13 @@ class HomeViewModel(
         refreshVpnConfigs()
     }
 
+    fun onEngineOverrideChanged(override: EngineOverride) {
+        _uiState.update { current ->
+            if (!current.isAdmin) return@update current
+            current.copy(adminEngineOverride = override)
+        }
+    }
+
     fun onCheckPriceClicked() {
         val rawSubmittedUrl = _uiState.value.urlInput.trim()
         val dirtyBaselinePriceCents = parseDirtyBaselineCents(_uiState.value.dirtyBaselineInputRaw)
@@ -290,7 +313,6 @@ class HomeViewModel(
             var finalShowBrowser = false
             var awaitingVpnPermission = false
             val submittedUrl = canonicalizeUrlIfNeeded(rawSubmittedUrl)
-            val spoofUrlPlan = sanitizeUrlForSpoof(submittedUrl)
             val attemptRows = mutableListOf<PriceCheckAttempt>()
             val attemptedConfigs = mutableListOf<String>()
             val diagnostics = mutableListOf<String>()
@@ -419,13 +441,24 @@ class HomeViewModel(
                         repository.logPriceCheckRun(failedPriceCheck, attemptRows)
                         return@launch
                     }
+                val profileResolution = resolveActiveEngineProfile(
+                    strategyProfile = strategy.engineProfile,
+                    override = _uiState.value.adminEngineOverride,
+                    isAdmin = _uiState.value.isAdmin,
+                )
+                val spoofUrlPlan = when (profileResolution.profile) {
+                    EngineProfile.LEGACY -> SanitizedUrl(url = submittedUrl, wasSanitized = false)
+                    EngineProfile.YALE_SMART -> sanitizeUrlForSpoof(submittedUrl)
+                }
                 var spoofedResult: ExtractionResult? = null
                 var finalConfig: String? = null
                 for (attempt in 0 until SPOOF_ATTEMPT_MAX) {
-                    val config = vpnRotationEngine.nextConfig(attemptedConfigs.toSet())
-                        ?: strategy.wireguardConfig
+                    val config = resolveSpoofConfig(
+                        excludedConfigs = attemptedConfigs.toSet(),
+                        strategyConfig = strategy.wireguardConfig,
+                    )
                     if (config == null) {
-                        terminalError = "No healthy VPN configs available for spoof attempts."
+                        terminalError = "No enabled VPN configs available for spoof attempts."
                         diagnostics += terminalError.orEmpty()
                         break
                     }
@@ -436,6 +469,8 @@ class HomeViewModel(
                     val execution = runSpoofAttempt(
                         executionUrl = spoofUrlPlan.url,
                         urlSanitized = spoofUrlPlan.wasSanitized,
+                        engineProfile = profileResolution.profile,
+                        engineSelectionSource = profileResolution.selectionSource,
                         config = config,
                         attemptNumber = attemptNumber,
                     )
@@ -450,6 +485,8 @@ class HomeViewModel(
                                 waitingConfig = config,
                                 spoofExecutionUrl = spoofUrlPlan.url,
                                 spoofUrlSanitized = spoofUrlPlan.wasSanitized,
+                                spoofEngineProfile = profileResolution.profile,
+                                spoofEngineSelectionSource = profileResolution.selectionSource,
                                 attemptedConfigs = attemptedConfigs.toList(),
                                 diagnostics = diagnostics.toList(),
                                 attemptRows = attemptRows.toList(),
@@ -632,7 +669,9 @@ class HomeViewModel(
                         appliedLevers = buildAppliedLevers(
                             urlSanitized = pending.spoofUrlSanitized,
                             amnesiaProtocol = false,
-                            trackingProtection = TRACKING_PROTECTION_STRICT,
+                            trackingProtection = trackingProtectionForProfile(pending.spoofEngineProfile),
+                            engineProfile = pending.spoofEngineProfile,
+                            engineSelectionSource = pending.spoofEngineSelectionSource,
                         ),
                     ),
                 )
@@ -687,23 +726,26 @@ class HomeViewModel(
                     val config = if (attempt == pending.attemptIndex) {
                         pending.waitingConfig
                     } else {
-                        val next = vpnRotationEngine.nextConfig(attemptedConfigs.toSet())
-                        val resolved = next ?: pending.strategy.wireguardConfig
-                        if (resolved != null && resolved !in attemptedConfigs) {
+                        val resolved = resolveSpoofConfig(
+                            excludedConfigs = attemptedConfigs.toSet(),
+                            strategyConfig = pending.strategy.wireguardConfig,
+                        )
+                        if (resolved == null) {
+                            terminalError = "No enabled VPN configs available for spoof attempts."
+                            diagnostics += terminalError.orEmpty()
+                            break
+                        }
+                        if (resolved !in attemptedConfigs) {
                             attemptedConfigs += resolved
                         }
                         resolved
                     }
 
-                    if (config == null) {
-                        terminalError = "No healthy VPN configs available for spoof attempts."
-                        diagnostics += terminalError.orEmpty()
-                        break
-                    }
-
                     val execution = runSpoofAttempt(
                         executionUrl = pending.spoofExecutionUrl,
                         urlSanitized = pending.spoofUrlSanitized,
+                        engineProfile = pending.spoofEngineProfile,
+                        engineSelectionSource = pending.spoofEngineSelectionSource,
                         config = config,
                         attemptNumber = attemptNumber,
                     )
@@ -944,6 +986,8 @@ class HomeViewModel(
     private suspend fun runSpoofAttempt(
         executionUrl: String,
         urlSanitized: Boolean,
+        engineProfile: EngineProfile,
+        engineSelectionSource: String,
         config: String,
         attemptNumber: Int,
     ): SpoofAttemptExecution {
@@ -951,6 +995,9 @@ class HomeViewModel(
         var extractionResult: Result<ExtractionResult>? = null
         var permissionIntent: Intent? = null
         var failureUserMessage: String? = null
+        val strictTrackingProtection = engineProfile == EngineProfile.YALE_SMART
+        val trackingProtection = trackingProtectionForProfile(engineProfile)
+        val navigationUrl = buildEngineBootstrapNavigationUrl(executionUrl, engineProfile)
         val latencyMs = measureTimeMillis {
             _uiState.update { current ->
                 current.copy(
@@ -986,11 +1033,11 @@ class HomeViewModel(
                 "Spoof execution URL prepared (sanitized=$urlSanitized): $executionUrl",
             )
             extractionResult = extractionEngine.loadAndExtract(
-                executionUrl,
+                navigationUrl,
                 request = ExtractionRequest(
                     cleanSessionRequired = true,
                     phase = "spoof",
-                    strictTrackingProtection = true,
+                    strictTrackingProtection = strictTrackingProtection,
                 ),
             )
         }
@@ -1003,7 +1050,9 @@ class HomeViewModel(
                     appliedLevers = buildAppliedLevers(
                         urlSanitized = urlSanitized,
                         amnesiaProtocol = false,
-                        trackingProtection = TRACKING_PROTECTION_STRICT,
+                        trackingProtection = trackingProtection,
+                        engineProfile = engineProfile,
+                        engineSelectionSource = engineSelectionSource,
                     ),
                     latencyMs = latencyMs,
                 )
@@ -1015,7 +1064,9 @@ class HomeViewModel(
                 appliedLevers = buildAppliedLevers(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = false,
-                    trackingProtection = TRACKING_PROTECTION_STRICT,
+                    trackingProtection = trackingProtection,
+                    engineProfile = engineProfile,
+                    engineSelectionSource = engineSelectionSource,
                 ),
                 latencyMs = latencyMs,
             )
@@ -1028,7 +1079,9 @@ class HomeViewModel(
                 appliedLevers = buildAppliedLevers(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = true,
-                    trackingProtection = TRACKING_PROTECTION_STRICT,
+                    trackingProtection = trackingProtection,
+                    engineProfile = engineProfile,
+                    engineSelectionSource = engineSelectionSource,
                 ),
                 latencyMs = latencyMs,
             )
@@ -1049,7 +1102,9 @@ class HomeViewModel(
             appliedLevers = buildAppliedLevers(
                 urlSanitized = urlSanitized,
                 amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
-                trackingProtection = TRACKING_PROTECTION_STRICT,
+                trackingProtection = trackingProtection,
+                engineProfile = engineProfile,
+                engineSelectionSource = engineSelectionSource,
             ),
             latencyMs = latencyMs,
         )
@@ -1138,6 +1193,8 @@ class HomeViewModel(
         urlSanitized: Boolean,
         amnesiaProtocol: Boolean? = null,
         trackingProtection: String? = null,
+        engineProfile: EngineProfile? = null,
+        engineSelectionSource: String? = null,
     ): JsonObject {
         return buildJsonObject {
             put("url_sanitized", JsonPrimitive(urlSanitized))
@@ -1146,6 +1203,14 @@ class HomeViewModel(
             }
             if (trackingProtection != null) {
                 put("tracking_protection", JsonPrimitive(trackingProtection))
+            }
+            if (engineProfile != null) {
+                put("engine_profile", JsonPrimitive(engineProfile.toTelemetryValue()))
+                put("engine_version", JsonPrimitive(ENGINE_VERSION))
+                put("engine_build_id", JsonPrimitive(ENGINE_BUILD_ID))
+            }
+            if (engineSelectionSource != null) {
+                put("engine_selection_source", JsonPrimitive(engineSelectionSource))
             }
         }
     }
@@ -1175,8 +1240,65 @@ class HomeViewModel(
             throwable?.cause is CleanSessionPreparationException
     }
 
+    private fun resolveActiveEngineProfile(
+        strategyProfile: EngineProfile,
+        override: EngineOverride,
+        isAdmin: Boolean,
+    ): ActiveEngineProfile {
+        if (!isAdmin || override == EngineOverride.AUTO) {
+            return ActiveEngineProfile(
+                profile = strategyProfile,
+                selectionSource = "strategy",
+            )
+        }
+        return when (override) {
+            EngineOverride.AUTO -> ActiveEngineProfile(strategyProfile, "strategy")
+            EngineOverride.FORCE_LEGACY ->
+                ActiveEngineProfile(EngineProfile.LEGACY, "admin_override")
+            EngineOverride.FORCE_YALE_SMART ->
+                ActiveEngineProfile(EngineProfile.YALE_SMART, "admin_override")
+        }
+    }
+
+    private fun trackingProtectionForProfile(profile: EngineProfile): String {
+        return if (profile == EngineProfile.YALE_SMART) TRACKING_PROTECTION_STRICT
+        else TRACKING_PROTECTION_OFF
+    }
+
+    private fun EngineProfile.toTelemetryValue(): String {
+        return when (this) {
+            EngineProfile.LEGACY -> "legacy"
+            EngineProfile.YALE_SMART -> "yale_smart"
+        }
+    }
+
+    private fun buildEngineBootstrapNavigationUrl(
+        executionUrl: String,
+        profile: EngineProfile,
+    ): String {
+        val tokenValue = profile.toTelemetryValue()
+        val hashIndex = executionUrl.indexOf('#')
+        if (hashIndex < 0) {
+            return "$executionUrl#$ENGINE_HASH_KEY=$tokenValue"
+        }
+        val base = executionUrl.substring(0, hashIndex)
+        val existingHash = executionUrl.substring(hashIndex + 1)
+        val hashParts = existingHash
+            .split("&")
+            .filter { it.isNotBlank() }
+            .filterNot { part ->
+                part.substringBefore('=')
+                    .trim()
+                    .equals(ENGINE_HASH_KEY, ignoreCase = true)
+            }
+            .toMutableList()
+        hashParts += "$ENGINE_HASH_KEY=$tokenValue"
+        return "$base#${hashParts.joinToString("&")}"
+    }
+
     private suspend fun ensureBaselineVpnActive(): String? {
         val baselineId = resolveBaselineConfigId()
+            ?: return "No baseline VPN config selected. Set a baseline in Manage VPN."
         val connectResult = vpnEngine.connect(baselineId)
         if (connectResult.isFailure) {
             val throwable = connectResult.exceptionOrNull()
@@ -1188,10 +1310,20 @@ class HomeViewModel(
         return null
     }
 
-    private fun resolveBaselineConfigId(): String {
+    private fun resolveBaselineConfigId(): String? {
         val baseline = vpnConfigStore.getBaselineConfigId()
-        if (!baseline.isNullOrBlank()) return baseline
-        return BASELINE_VPN_CONFIG
+        return baseline?.takeIf { it.isNotBlank() }
+    }
+
+    private fun resolveSpoofConfig(
+        excludedConfigs: Set<String>,
+        strategyConfig: String?,
+    ): String? {
+        val fromRotation = vpnRotationEngine.nextConfig(excludedConfigs)
+        if (fromRotation != null) return fromRotation
+
+        val fallback = strategyConfig?.takeIf { it.isNotBlank() } ?: return null
+        return fallback
     }
 
     private fun resolveConfigSource(configId: String?): String? {
@@ -1254,9 +1386,10 @@ class HomeViewModel(
         val deployedConfigDisplay = displayConfigLabel(finalConfig)
         val attemptedDisplay = attemptedConfigs.map(::displayConfigLabel)
         val finalDisplay = displayConfigLabel(finalConfig)
+        val baselineDisplay = resolveBaselineConfigId()?.let(::displayConfigLabel) ?: "Not set"
         return SummaryData(
             lifetimePotentialSavings = formatUsd(lifetimePotentialSavingsCents),
-            baselineConfig = displayConfigLabel(resolveBaselineConfigId()),
+            baselineConfig = baselineDisplay,
             outcome = outcome,
             baselinePrice = baseline,
             spoofedPrice = spoofed,
@@ -1306,9 +1439,16 @@ class HomeViewModel(
         val waitingConfig: String,
         val spoofExecutionUrl: String,
         val spoofUrlSanitized: Boolean,
+        val spoofEngineProfile: EngineProfile,
+        val spoofEngineSelectionSource: String,
         val attemptedConfigs: List<String>,
         val diagnostics: List<String>,
         val attemptRows: List<PriceCheckAttempt>,
+    )
+
+    private data class ActiveEngineProfile(
+        val profile: EngineProfile,
+        val selectionSource: String,
     )
 
     private data class SanitizedUrl(

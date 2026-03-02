@@ -8,8 +8,11 @@ import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.CleanSessionPreparationException
+import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
+import com.fairprice.app.engine.VpnConfigRecord
+import com.fairprice.app.engine.VpnConfigStore
 import com.fairprice.app.engine.VpnEngine
 import com.fairprice.app.engine.VpnPermissionRequiredException
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +76,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = extractionEngine,
             strategyEngine = strategyEngine,
         )
@@ -125,6 +140,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = extractionEngine,
             strategyEngine = strategyEngine,
         )
@@ -168,7 +195,7 @@ class HomeViewModelTest {
         assertEquals("success", summary.outcome)
         assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
         assertEquals(
-            listOf("https://example.com/p/123", "https://example.com/p/123"),
+            listOf("https://example.com/p/123", "https://example.com/p/123#fp_engine=yale_smart"),
             extractionEngine.loadedUrls,
         )
     }
@@ -202,7 +229,10 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(canonicalUrl, strategyEngine.lastUrl)
-        assertEquals(listOf(canonicalUrl, canonicalUrl), extractionEngine.loadedUrls)
+        assertEquals(
+            listOf(canonicalUrl, "$canonicalUrl#fp_engine=yale_smart"),
+            extractionEngine.loadedUrls,
+        )
         assertEquals(canonicalUrl, repository.lastLoggedPriceCheck?.productUrl)
     }
 
@@ -235,7 +265,10 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(originalShortUrl, strategyEngine.lastUrl)
-        assertEquals(listOf(originalShortUrl, originalShortUrl), extractionEngine.loadedUrls)
+        assertEquals(
+            listOf(originalShortUrl, "$originalShortUrl#fp_engine=yale_smart"),
+            extractionEngine.loadedUrls,
+        )
         assertEquals(originalShortUrl, repository.lastLoggedPriceCheck?.productUrl)
     }
 
@@ -270,7 +303,7 @@ class HomeViewModelTest {
         assertEquals(
             listOf(
                 inputUrl,
-                "https://example.com/p/123?sku=99#details",
+                "https://example.com/p/123?sku=99#details&fp_engine=yale_smart",
             ),
             extractionEngine.loadedUrls,
         )
@@ -293,6 +326,22 @@ class HomeViewModelTest {
         assertEquals(
             "strict",
             attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "yale_smart",
+            attempts[1].appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "11.5a",
+            attempts[1].appliedLevers?.jsonObject?.get("engine_version")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "local-dev",
+            attempts[1].appliedLevers?.jsonObject?.get("engine_build_id")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "strategy",
+            attempts[1].appliedLevers?.jsonObject?.get("engine_selection_source")?.jsonPrimitive?.content,
         )
     }
 
@@ -324,7 +373,10 @@ class HomeViewModelTest {
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(listOf(inputUrl, inputUrl), extractionEngine.loadedUrls)
+        assertEquals(
+            listOf(inputUrl, "$inputUrl#fp_engine=yale_smart"),
+            extractionEngine.loadedUrls,
+        )
         val attempts = repository.lastLoggedAttempts
         assertEquals(2, attempts.size)
         assertEquals(
@@ -338,6 +390,68 @@ class HomeViewModelTest {
         assertEquals(
             "strict",
             attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "yale_smart",
+            attempts[1].appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun adminOverride_forceLegacy_disablesSpoofSanitizationAndStrictTracking() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2599, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 2399, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = "s_legacy",
+                    wireguardConfig = "wg-test-config",
+                    engineProfile = EngineProfile.YALE_SMART,
+                ),
+            ),
+        )
+        val inputUrl = "https://example.com/p/123?utm_source=ad&sku=99"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            isAdminUser = true,
+            shortUrlResolver = { it },
+        )
+        viewModel.onEngineOverrideChanged(EngineOverride.FORCE_LEGACY)
+        viewModel.onUrlInputChanged(inputUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(inputUrl, "$inputUrl#fp_engine=legacy"),
+            extractionEngine.loadedUrls,
+        )
+        val spoofRequest = extractionEngine.requests[1]
+        assertEquals(false, spoofRequest.strictTrackingProtection)
+        val spoofAttempt = repository.lastLoggedAttempts.last()
+        assertEquals(
+            "false",
+            spoofAttempt.appliedLevers?.jsonObject?.get("url_sanitized")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "off",
+            spoofAttempt.appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "legacy",
+            spoofAttempt.appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "admin_override",
+            spoofAttempt.appliedLevers?.jsonObject?.get("engine_selection_source")?.jsonPrimitive?.content,
         )
     }
 
@@ -362,6 +476,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = extractionEngine,
             strategyEngine = strategyEngine,
         )
@@ -447,6 +573,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = extractionEngine,
             strategyEngine = strategyEngine,
         )
@@ -461,7 +599,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(2, vpnEngine.connectCalls)
-        assertEquals("baseline_saltlake_ut-US-UT-137.conf", vpnEngine.lastConnectConfig)
+        assertEquals("user:baseline", vpnEngine.lastConnectConfig)
         assertEquals(0, vpnEngine.disconnectCalls)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Idle)
         assertEquals("", viewModel.uiState.value.dirtyBaselineInputRaw)
@@ -480,6 +618,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = FakeExtractionEngine(
                 extractionResults = mutableListOf(
                     Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
@@ -525,6 +675,18 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             vpnEngine = vpnEngine,
+            vpnConfigStore = FakeVpnConfigStore(
+                baselineConfigId = "user:baseline",
+                configs = listOf(
+                    VpnConfigRecord(
+                        id = "user:baseline",
+                        source = com.fairprice.app.engine.VpnConfigSource.USER,
+                        displayName = "Baseline",
+                        providerHint = "proton",
+                        enabled = true,
+                    ),
+                ),
+            ),
             extractionEngine = extractionEngine,
             strategyEngine = strategyEngine,
         )
@@ -538,7 +700,7 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(2, vpnEngine.connectCalls)
-        assertEquals("baseline_saltlake_ut-US-UT-137.conf", vpnEngine.lastConnectConfig)
+        assertEquals("user:baseline", vpnEngine.lastConnectConfig)
         assertEquals(0, vpnEngine.disconnectCalls)
     }
 
@@ -1063,5 +1225,21 @@ class HomeViewModelTest {
         override suspend fun fetchLifetimePotentialSavingsCents(): Result<Int> {
             return Result.success(lifetimeSavingsCents)
         }
+    }
+
+    private class FakeVpnConfigStore(
+        private val baselineConfigId: String? = null,
+        private val configs: List<VpnConfigRecord> = emptyList(),
+    ) : VpnConfigStore {
+        override fun listUserConfigs(): List<VpnConfigRecord> = configs
+        override fun listEnabledUserConfigs(): List<VpnConfigRecord> = configs.filter { it.enabled }
+        override fun readUserConfigText(configId: String): Result<String> = Result.success("")
+        override fun importUserConfig(
+            displayName: String,
+            rawConfigText: String,
+        ): Result<VpnConfigRecord> = Result.failure(IllegalStateException("Not implemented for tests"))
+        override fun setUserConfigEnabled(configId: String, enabled: Boolean): Result<Unit> = Result.success(Unit)
+        override fun getBaselineConfigId(): String? = baselineConfigId
+        override fun setBaselineConfigId(configId: String): Result<Unit> = Result.success(Unit)
     }
 }
