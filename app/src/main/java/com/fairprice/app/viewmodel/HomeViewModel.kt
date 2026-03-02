@@ -140,6 +140,7 @@ class HomeViewModel(
         private const val ENGINE_HASH_KEY = "fp_engine"
         private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
         private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
+        private const val YALE_SMART_PROFILE_TOKEN = "yale_smart"
         private const val SNIFFER_INTEL_TOKEN = "sniffer_intel"
         private const val CLEAN_CONTROL_INTEL_TOKEN = "clean_control_intel"
         private const val PHASE_SNIFFER = "sniffer"
@@ -1576,7 +1577,7 @@ class HomeViewModel(
     private fun EngineProfile.toTelemetryValue(): String {
         return when (this) {
             EngineProfile.LEGACY -> CONTROL_PROFILE_TOKEN
-            EngineProfile.YALE_SMART -> "yale_smart"
+            EngineProfile.YALE_SMART -> YALE_SMART_PROFILE_TOKEN
         }
     }
 
@@ -1599,6 +1600,10 @@ class HomeViewModel(
         executionUrl: String,
         tokenValue: String,
     ): String {
+        // Contract:
+        // - No fragment => append "#fp_engine=<token>".
+        // - Existing fragment => append/replace using "&" within hash params.
+        // - Existing fp_engine key is replaced to avoid duplicate token keys.
         val hashIndex = executionUrl.indexOf('#')
         if (hashIndex < 0) {
             return "$executionUrl#$ENGINE_HASH_KEY=$tokenValue"

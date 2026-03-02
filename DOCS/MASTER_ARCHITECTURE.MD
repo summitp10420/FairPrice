@@ -60,6 +60,12 @@ Graceful Degradation: If sniffer fails, clean-control fallback is attempted. If 
 
 Telemetry: The app logs per-pass attempt rows with explicit pass identities (`sniffer`, `clean_control`, `spoof`) and summary provenance (`tactic_source_pass`, clean-control execution mode, shadow sampled). Legacy fields remain for compatibility.
 
+URL Token Contract (Gecko bootstrap):
+- Pass navigation URLs must include a single `fp_engine` hash token.
+- No existing fragment: append `#fp_engine=<token>`.
+- Existing fragment: append/replace token with `&fp_engine=<token>` inside hash params (never double-`#`).
+- Current token mapping: sniffer=`sniffer_intel`, clean-control extraction=`clean_control_intel`, spoof profile=`yale_smart` or `clean_control_v1`.
+
 3.1 Current Modular Engine Boundaries
 - Strategy Module: `PricingStrategyEngine` defines strategy selection as a pure Kotlin/domain-like seam. `DefaultPricingStrategyEngine` is the current stub implementation and can be replaced without changing UI orchestration flow.
 - Extraction Module: `ExtractionEngine` returns structured `ExtractionResult` and remains the boundary between WebExtension payload parsing and ViewModel orchestration.

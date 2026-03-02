@@ -254,6 +254,12 @@ Key telemetry:
 - Coverage of lever variables in logs.
 - Counterfactual coverage from sampled clean-control shadow runs.
 
+URL bootstrap guardrail:
+- Tests and runtime must follow one `fp_engine` hash contract:
+  - append as `#fp_engine=<token>` when no fragment exists
+  - append/replace as `&fp_engine=<token>` when fragment exists
+  - never expect `#...#fp_engine` double-hash formatting.
+
 3.10 Security & Secret Hygiene Lever
 What it controls:
 - Protection of VPN keys and user-sensitive artifacts.

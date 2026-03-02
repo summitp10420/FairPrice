@@ -46,6 +46,13 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
     private val dispatcher = StandardTestDispatcher()
+    companion object {
+        private const val TOKEN_KEY = "fp_engine"
+        private const val TOKEN_SNIFFER_INTEL = "sniffer_intel"
+        private const val TOKEN_CLEAN_CONTROL_INTEL = "clean_control_intel"
+        private const val TOKEN_YALE_SMART = "yale_smart"
+        private const val TOKEN_CLEAN_CONTROL_V1 = "clean_control_v1"
+    }
 
     @Before
     fun setUp() {
@@ -197,9 +204,9 @@ class HomeViewModelTest {
         assertEquals("success", summary.outcome)
         assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
         assertEquals(
-            listOf(
-                "https://example.com/p/123#fp_engine=sniffer_intel",
-                "https://example.com/p/123#fp_engine=yale_smart",
+            expectedPassUrls(
+                "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
             ),
             extractionEngine.loadedUrls,
         )
@@ -235,9 +242,9 @@ class HomeViewModelTest {
 
         assertEquals(canonicalUrl, strategyEngine.lastUrl)
         assertEquals(
-            listOf(
-                "$canonicalUrl#fp_engine=sniffer_intel",
-                "$canonicalUrl#fp_engine=yale_smart",
+            expectedPassUrls(
+                canonicalUrl to TOKEN_SNIFFER_INTEL,
+                canonicalUrl to TOKEN_YALE_SMART,
             ),
             extractionEngine.loadedUrls,
         )
@@ -274,13 +281,81 @@ class HomeViewModelTest {
 
         assertEquals(originalShortUrl, strategyEngine.lastUrl)
         assertEquals(
-            listOf(
-                "$originalShortUrl#fp_engine=sniffer_intel",
-                "$originalShortUrl#fp_engine=yale_smart",
+            expectedPassUrls(
+                originalShortUrl to TOKEN_SNIFFER_INTEL,
+                originalShortUrl to TOKEN_YALE_SMART,
             ),
             extractionEngine.loadedUrls,
         )
         assertEquals(originalShortUrl, repository.lastLoggedPriceCheck?.productUrl)
+    }
+
+    @Test
+    fun tokenContract_noFragment_appendsHashToken() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
+        )
+        val inputUrl = "https://example.com/p/123"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shadowCleanControlSampler = { false },
+        )
+
+        viewModel.onUrlInputChanged(inputUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(
+            expectedPassUrls(
+                inputUrl to TOKEN_SNIFFER_INTEL,
+                inputUrl to TOKEN_YALE_SMART,
+            ),
+            extractionEngine.loadedUrls,
+        )
+    }
+
+    @Test
+    fun tokenContract_existingFpEngine_replacesTokenWithoutDuplicatingKey() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
+        )
+        val inputUrl = "https://example.com/p/123#details&fp_engine=legacy_token"
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shortUrlResolver = { it },
+            shadowCleanControlSampler = { false },
+        )
+
+        viewModel.onUrlInputChanged(inputUrl)
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        val snifferUrl = extractionEngine.loadedUrls.first()
+        assertTrue(snifferUrl.contains("#details&$TOKEN_KEY=$TOKEN_SNIFFER_INTEL"))
+        assertTrue(!snifferUrl.contains("legacy_token"))
+        assertEquals(1, Regex("""fp_engine=""").findAll(snifferUrl).count())
     }
 
     @Test
@@ -312,9 +387,9 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf(
-                "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details&fp_engine=sniffer_intel",
-                "https://example.com/p/123?sku=99#details&fp_engine=yale_smart",
+            expectedPassUrls(
+                "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123?sku=99#details" to TOKEN_YALE_SMART,
             ),
             extractionEngine.loadedUrls,
         )
@@ -385,7 +460,10 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf("$inputUrl#fp_engine=sniffer_intel", "$inputUrl#fp_engine=yale_smart"),
+            expectedPassUrls(
+                inputUrl to TOKEN_SNIFFER_INTEL,
+                inputUrl to TOKEN_YALE_SMART,
+            ),
             extractionEngine.loadedUrls,
         )
         val attempts = repository.lastLoggedAttempts
@@ -442,7 +520,10 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            listOf("$inputUrl#fp_engine=sniffer_intel", "$inputUrl#fp_engine=clean_control_v1"),
+            expectedPassUrls(
+                inputUrl to TOKEN_SNIFFER_INTEL,
+                inputUrl to TOKEN_CLEAN_CONTROL_V1,
+            ),
             extractionEngine.loadedUrls,
         )
         val spoofRequest = extractionEngine.requests[1]
@@ -793,6 +874,14 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(
+            expectedPassUrls(
+                "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
+            ),
+            extractionEngine.loadedUrls,
+        )
         assertEquals(listOf("sniffer", "clean_control", "spoof"), repository.lastLoggedAttempts.map { it.phase })
         assertEquals("degraded_sniffer_fallback_success", repository.lastLoggedPriceCheck?.outcome)
         assertEquals(true, repository.lastLoggedPriceCheck?.extractionSuccessful)
@@ -831,6 +920,14 @@ class HomeViewModelTest {
         advanceUntilIdle()
 
         assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(
+            expectedPassUrls(
+                "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
+            ),
+            extractionEngine.loadedUrls,
+        )
         assertEquals(1, vpnEngine.connectCalls)
         assertEquals(listOf("sniffer", "clean_control", "spoof"), repository.lastLoggedAttempts.map { it.phase })
         val summary = (viewModel.uiState.value.processState as HomeProcessState.Success).summary
@@ -1409,5 +1506,27 @@ class HomeViewModelTest {
         override fun setUserConfigEnabled(configId: String, enabled: Boolean): Result<Unit> = Result.success(Unit)
         override fun getBaselineConfigId(): String? = baselineConfigId
         override fun setBaselineConfigId(configId: String): Result<Unit> = Result.success(Unit)
+    }
+
+    private fun expectedPassUrls(vararg entries: Pair<String, String>): List<String> {
+        return entries.map { (url, token) -> expectedUrlWithToken(url, token) }
+    }
+
+    private fun expectedUrlWithToken(url: String, token: String): String {
+        val hashIndex = url.indexOf('#')
+        if (hashIndex < 0) {
+            return "$url#$TOKEN_KEY=$token"
+        }
+        val base = url.substring(0, hashIndex)
+        val existingHash = url.substring(hashIndex + 1)
+        val hashParts = existingHash
+            .split("&")
+            .filter { it.isNotBlank() }
+            .filterNot { part ->
+                part.substringBefore('=').trim().equals(TOKEN_KEY, ignoreCase = true)
+            }
+            .toMutableList()
+        hashParts += "$TOKEN_KEY=$token"
+        return "$base#${hashParts.joinToString("&")}"
     }
 }
