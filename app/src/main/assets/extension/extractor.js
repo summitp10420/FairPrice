@@ -2,11 +2,12 @@
   const NATIVE_CHANNEL = "com.fairprice.extractor";
   const MAX_ATTEMPTS = 60;
   const RETRY_DELAY_MS = 500;
-  const CANVAS_HOOK_SENTINEL = "__fairpriceCanvasHookInstalled";
+  const ENHANCED_FLAG = "__fp_enhanced";
+  const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
+  const HW_FP_ATTR = "data-fp-hardware-fp";
   let didSend = false;
   let attempts = 0;
   let observer = null;
-  let hardwareFingerprintingDetected = false;
 
   function normalizePriceToCents(value) {
     if (!value) return null;
@@ -150,38 +151,27 @@
       tactics.add("cookie_tracking");
     }
 
-    const hasSurveillanceMarker =
-      typeof window.FS !== "undefined" ||
-      typeof window._hjSettings !== "undefined" ||
-      typeof window.datadome !== "undefined" ||
-      typeof window.__ddg1_ !== "undefined" ||
-      document.querySelector("script[src*='datadome']") != null;
-    if (hasSurveillanceMarker) {
-      tactics.add("surveillance_active");
-    }
+    const enhancedMode = window[ENHANCED_FLAG] === true;
+    if (enhancedMode) {
+      const hasSurveillanceMarker =
+        typeof window.FS !== "undefined" ||
+        typeof window._hjSettings !== "undefined" ||
+        typeof window.datadome !== "undefined" ||
+        typeof window.__ddg1_ !== "undefined" ||
+        document.querySelector("script[src*='datadome']") != null;
+      if (hasSurveillanceMarker) {
+        tactics.add("surveillance_active");
+      }
 
-    if (hardwareFingerprintingDetected) {
-      tactics.add("hardware_fingerprinting");
+      const hardwareFingerprintingDetected =
+        window[HW_FP_FLAG] === true ||
+        document.documentElement?.getAttribute(HW_FP_ATTR) === "1";
+      if (hardwareFingerprintingDetected) {
+        tactics.add("hardware_fingerprinting");
+      }
     }
 
     return Array.from(tactics);
-  }
-
-  function installCanvasFingerprintObserver() {
-    if (window[CANVAS_HOOK_SENTINEL]) {
-      return;
-    }
-    const prototype = window.HTMLCanvasElement?.prototype;
-    if (!prototype || typeof prototype.toDataURL !== "function") {
-      return;
-    }
-
-    const originalToDataURL = prototype.toDataURL;
-    prototype.toDataURL = function wrappedToDataURL(...args) {
-      hardwareFingerprintingDetected = true;
-      return originalToDataURL.apply(this, args);
-    };
-    window[CANVAS_HOOK_SENTINEL] = true;
   }
 
   function buildPayload() {
@@ -256,8 +246,6 @@
       }
     }, RETRY_DELAY_MS);
   }
-
-  installCanvasFingerprintObserver();
 
   observer = new MutationObserver(() => {
     sendIfReady();

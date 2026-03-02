@@ -19,6 +19,15 @@
         "<all_urls>"
       ],
       "js": [
+        "hook.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
         "extractor.js"
       ],
       "run_at": "document_end"
