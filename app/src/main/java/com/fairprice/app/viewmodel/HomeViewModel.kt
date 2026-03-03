@@ -731,7 +731,7 @@ class HomeViewModel(
                                 vpnConfig = config,
                                 success = false,
                                 throwable = execution.throwable,
-                                extracted = null,
+                                extracted = execution.extracted,
                                 latencyMs = execution.latencyMs,
                                 executionUrl = spoofUrlPlan.url,
                                 appliedLevers = execution.appliedLevers,
@@ -1038,7 +1038,7 @@ class HomeViewModel(
                                 vpnConfig = config,
                                 success = false,
                                 throwable = execution.throwable,
-                                extracted = null,
+                                extracted = execution.extracted,
                                 latencyMs = execution.latencyMs,
                                 executionUrl = pending.spoofExecutionUrl,
                                 appliedLevers = execution.appliedLevers,
@@ -1355,6 +1355,7 @@ class HomeViewModel(
                 throwable = IllegalStateException("Spoof attempt interrupted."),
                 connected = connected,
                 userMessage = "Spoof attempt interrupted.",
+                extracted = null,
                 appliedLevers = buildAppliedLevers(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = false,
@@ -1368,9 +1369,29 @@ class HomeViewModel(
         }
 
         if (result.isSuccess) {
+            val extracted = result.getOrThrow()
+            if (extracted.isWafBlockDetected()) {
+                val spoofWafThrowable = IllegalStateException("waf_block detected during Spoof Pass")
+                vpnRotationEngine.reportAttemptResult(config, success = false)
+                return SpoofAttemptExecution.Failure(
+                    throwable = spoofWafThrowable,
+                    connected = connected,
+                    userMessage = "Spoof attempt blocked by WAF. Rotating to the next config.",
+                    extracted = extracted,
+                    appliedLevers = buildAppliedLevers(
+                        urlSanitized = urlSanitized,
+                        amnesiaProtocol = true,
+                        trackingProtection = trackingProtection,
+                        strategy = strategy,
+                        engineProfile = engineProfile,
+                        engineSelectionSource = engineSelectionSource,
+                    ),
+                    latencyMs = latencyMs,
+                )
+            }
             vpnRotationEngine.reportAttemptResult(config, success = true)
             return SpoofAttemptExecution.Success(
-                result = result.getOrThrow(),
+                result = extracted,
                 appliedLevers = buildAppliedLevers(
                     urlSanitized = urlSanitized,
                     amnesiaProtocol = true,
@@ -1395,6 +1416,7 @@ class HomeViewModel(
             throwable = throwable,
             connected = connected,
             userMessage = resolvedUserMessage,
+            extracted = null,
             appliedLevers = buildAppliedLevers(
                 urlSanitized = urlSanitized,
                 amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
@@ -1785,6 +1807,7 @@ class HomeViewModel(
             val throwable: Throwable?,
             val connected: Boolean,
             val userMessage: String,
+            val extracted: ExtractionResult?,
             val appliedLevers: JsonObject,
             override val latencyMs: Long,
         ) : SpoofAttemptExecution

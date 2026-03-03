@@ -39,6 +39,7 @@
   }
 
   function markHardwareFingerprinting() {
+    if (window[HW_FP_FLAG] === true) return;
     window[HW_FP_FLAG] = true;
     window.postMessage({ type: HW_FP_MESSAGE_TYPE }, window.location.origin);
   }
@@ -82,9 +83,12 @@
     script.textContent = `
       (() => {
         if (window.__fpPageFingerprintHookInstalled) return;
+        let signaled = false;
         const signal = () => {
+          if (signaled) return;
           try {
             window.postMessage({ type: "${HW_FP_MESSAGE_TYPE}" }, window.location.origin);
+            signaled = true;
           } catch (e) {}
         };
         const canvasProto = window.HTMLCanvasElement && window.HTMLCanvasElement.prototype;

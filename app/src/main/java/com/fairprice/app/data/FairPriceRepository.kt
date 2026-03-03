@@ -75,6 +75,9 @@ class FairPriceRepositoryImpl(
                 .decodeList<PriceCheckSavingsRow>()
 
             rows.sumOf { row ->
+                val extractionSuccessful = row.extractionSuccessful == true
+                val spoofSuccessful = row.spoofSuccess == true
+                if (!extractionSuccessful || !spoofSuccessful) return@sumOf 0
                 val dirtyBaseline = row.dirtyBaselinePriceCents ?: return@sumOf 0
                 val found = row.foundPriceCents ?: return@sumOf 0
                 (dirtyBaseline - found).coerceAtLeast(0)
@@ -241,6 +244,10 @@ class FairPriceRepositoryImpl(
         val dirtyBaselinePriceCents: Int? = null,
         @SerialName("found_price_cents")
         val foundPriceCents: Int? = null,
+        @SerialName("extraction_successful")
+        val extractionSuccessful: Boolean? = null,
+        @SerialName("spoof_success")
+        val spoofSuccess: Boolean? = null,
     )
 
     private fun extractDetectedTactics(priceCheck: PriceCheck): List<String> {

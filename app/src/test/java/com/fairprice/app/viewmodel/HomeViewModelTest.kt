@@ -1065,6 +1065,65 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun spoofedExtraction_wafBlock_isFailureAndRetriesNextAttempt() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
+                Result.success(
+                    ExtractionResult(
+                        priceCents = 0,
+                        tactics = listOf("vendor_cloudflare", "block_cloudflare"),
+                        debugExtractionPath = "waf_block",
+                    ),
+                ),
+                Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(
+            expectedPassUrls(
+                "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
+            ),
+            extractionEngine.loadedUrls,
+        )
+        assertEquals(listOf("sniffer", "spoof", "spoof"), repository.lastLoggedAttempts.map { it.phase })
+        val spoofAttempts = repository.lastLoggedAttempts.filter { it.phase == "spoof" }
+        assertEquals(2, spoofAttempts.size)
+        assertEquals(false, spoofAttempts[0].success)
+        assertEquals("waf_block", spoofAttempts[0].debugExtractionPath)
+        assertEquals(true, spoofAttempts[1].success)
+        assertEquals(true, repository.lastLoggedPriceCheck?.spoofSuccess)
+        val diagnostics =
+            repository.lastLoggedPriceCheck?.rawExtractionData
+                ?.get("diagnostics")
+                ?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+                .orEmpty()
+        assertTrue(diagnostics.any { it.contains("blocked by WAF", ignoreCase = true) })
+        assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
     fun spoofedExtraction_retryIsBoundedToSingleRetry() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vpnEngine = FakeVpnEngine()
