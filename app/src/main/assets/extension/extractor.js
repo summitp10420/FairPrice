@@ -141,6 +141,85 @@
     return null;
   }
 
+  function detectWafVendorTactics() {
+    const tactics = new Set();
+    const cookie = String(document.cookie || "").toLowerCase();
+
+    const hasPerimeterX =
+      cookie.includes("_px") ||
+      cookie.includes("pxcts") ||
+      cookie.includes("_pxvid") ||
+      typeof window._pxAppId !== "undefined" ||
+      typeof window._pxvid !== "undefined" ||
+      typeof window.PerimeterX !== "undefined" ||
+      document.querySelector("script[src*='perimeterx']") != null ||
+      document.querySelector("script[src*='humansecurity']") != null;
+    if (hasPerimeterX) tactics.add("vendor_perimeterx");
+
+    const hasDatadome =
+      cookie.includes("datadome") ||
+      typeof window.datadome !== "undefined" ||
+      typeof window.__ddg1_ !== "undefined" ||
+      document.querySelector("script[src*='datadome']") != null ||
+      document.querySelector("script[src*='captcha-delivery.com']") != null;
+    if (hasDatadome) tactics.add("vendor_datadome");
+
+    const hasAkamai =
+      cookie.includes("_abck") ||
+      cookie.includes("bm_sz") ||
+      cookie.includes("ak_bmsc") ||
+      typeof window.bmak !== "undefined" ||
+      document.querySelector("script[src*='akamai']") != null ||
+      document.querySelector("script[src*='edgekey']") != null;
+    if (hasAkamai) tactics.add("vendor_akamai");
+
+    const hasCloudflare =
+      cookie.includes("__cf_bm") ||
+      cookie.includes("cf_clearance") ||
+      cookie.includes("cf_chl_") ||
+      typeof window.__cfRLUnblockHandlers !== "undefined" ||
+      document.querySelector("script[src*='cloudflare']") != null;
+    if (hasCloudflare) tactics.add("vendor_cloudflare");
+
+    return Array.from(tactics);
+  }
+
+  function detectWafBlock() {
+    const tactics = new Set();
+    const title = String(document.title || "").toLowerCase();
+    const bodyText = String(document.body?.textContent || "").toLowerCase();
+
+    const perimeterxBlocked =
+      document.querySelector("#px-captcha, .px-captcha, [id*='px-captcha']") != null ||
+      document.querySelector("iframe[src*='perimeterx']") != null;
+    if (perimeterxBlocked) tactics.add("block_perimeterx");
+
+    const datadomeBlocked =
+      document.querySelector("#datadome-captcha, .dd-captcha, [id*='datadome']") != null ||
+      title.includes("datadome") ||
+      bodyText.includes("datadome");
+    if (datadomeBlocked) tactics.add("block_datadome");
+
+    const cloudflareBlocked =
+      document.querySelector("#challenge-form, #cf-challenge-running, .cf-challenge") != null ||
+      title.includes("attention required") ||
+      title.includes("just a moment") ||
+      bodyText.includes("checking your browser before accessing");
+    if (cloudflareBlocked) tactics.add("block_cloudflare");
+
+    const akamaiBlocked =
+      bodyText.includes("access denied") &&
+      bodyText.includes("reference #") &&
+      (document.querySelector("[id*='akamai']") != null ||
+        document.querySelector("script[src*='akamai']") != null);
+    if (akamaiBlocked) tactics.add("block_akamai");
+
+    return {
+      blocked: tactics.size > 0,
+      tactics: Array.from(tactics),
+    };
+  }
+
   function sniffTactics() {
     const tactics = new Set();
     const hiddenCanvas = Array.from(document.querySelectorAll("canvas")).some((canvas) => {
@@ -161,6 +240,10 @@
     const trackingTokens = ["_fbp", "_ga", "_gid", "adroll", "doubleclick", "trk", "track"];
     if (trackingTokens.some((token) => cookie.includes(token))) {
       tactics.add("cookie_tracking");
+    }
+
+    for (const vendorTactic of detectWafVendorTactics()) {
+      tactics.add(vendorTactic);
     }
 
     const enhancedMode = window[ENHANCED_FLAG] === true;
@@ -187,6 +270,20 @@
 
   function buildPayload() {
     let extractionPath = "none";
+    const detectedTactics = new Set(sniffTactics());
+
+    const wafBlock = detectWafBlock();
+    if (wafBlock.blocked) {
+      for (const tactic of wafBlock.tactics) {
+        detectedTactics.add(tactic);
+      }
+      return {
+        type: "PRICE_EXTRACT",
+        priceCents: 0,
+        detectedTactics: Array.from(detectedTactics),
+        debugExtractionPath: "waf_block",
+      };
+    }
 
     const amazonCents = isAmazonProductPage() ? extractAmazonPriceCents() : null;
     if (amazonCents != null) {
@@ -210,7 +307,7 @@
     return {
       type: "PRICE_EXTRACT",
       priceCents: resolvedPrice,
-      detectedTactics: sniffTactics(),
+      detectedTactics: Array.from(detectedTactics),
       debugExtractionPath: extractionPath,
     };
   }

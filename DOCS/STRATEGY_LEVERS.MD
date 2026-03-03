@@ -1,4 +1,4 @@
-Last Updated: 2026-03-02
+Last Updated: 2026-03-03
 Owner: FairPrice product/engineering
 Status: Living document (update every phase)
 
@@ -146,6 +146,8 @@ Actions:
 - Run fallback selectors.
 - Detect anti-user tactics.
 - Emit debug extraction path.
+- Classify WAF vendors (`vendor_perimeterx`, `vendor_datadome`, `vendor_akamai`, `vendor_cloudflare`).
+- Detect block-page signatures and emit `debugExtractionPath = "waf_block"` with `block_*` tactics.
 
 Policy knobs:
 - Path ordering by retailer.
@@ -156,6 +158,7 @@ Key telemetry:
 - Extraction path used.
 - Sniffer vs clean-control vs spoof extraction success.
 - Tactic detection frequency.
+- Negative-feedback coverage (block events captured without timeout loss).
 
 3.6 URL Canonicalization Lever
 What it controls:
@@ -227,6 +230,7 @@ Policy knobs:
 Key telemetry:
 - Degraded run rate.
 - Primary failure stage (sniffer, clean_control, connect, spoof, logging).
+- Sniffer `waf_block` fallback rate and clean-control recovery rate.
 
 3.9 Telemetry Granularity Lever
 What it controls:

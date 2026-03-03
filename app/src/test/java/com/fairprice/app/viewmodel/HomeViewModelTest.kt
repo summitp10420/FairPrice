@@ -842,7 +842,7 @@ class HomeViewModelTest {
         assertTrue(viewModel.uiState.value.showBrowser)
         val processState = viewModel.uiState.value.processState
         assertTrue(processState is HomeProcessState.Error)
-        assertTrue((processState as HomeProcessState.Error).message.contains("Sniffer Pass failed"))
+        assertTrue((processState as HomeProcessState.Error).message.contains("Clean Control fallback failed"))
     }
 
     @Test
@@ -889,6 +889,64 @@ class HomeViewModelTest {
             repository.lastLoggedPriceCheck?.rawExtractionData?.get("tactic_source_pass")?.jsonPrimitive?.content
         assertEquals("clean_control", tacticSource)
         assertTrue(viewModel.uiState.value.processState is HomeProcessState.Success)
+    }
+
+    @Test
+    fun snifferWafBlock_routesToCleanControlFallback_andPersistsBlockTelemetry() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val vpnEngine = FakeVpnEngine()
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(
+                    ExtractionResult(
+                        priceCents = 0,
+                        tactics = listOf("vendor_datadome", "block_datadome"),
+                        debugExtractionPath = "waf_block",
+                    ),
+                ),
+                Result.success(ExtractionResult(priceCents = 2100, tactics = listOf("challenge_wall"))),
+                Result.success(ExtractionResult(priceCents = 1899, tactics = listOf("challenge_wall"))),
+            ),
+        )
+        val strategyEngine = FakeStrategyEngine(
+            result = Result.success(
+                StrategyResult(strategyId = "s_waf_fallback", wireguardConfig = "wg-test-config"),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = repository,
+            vpnEngine = vpnEngine,
+            extractionEngine = extractionEngine,
+            strategyEngine = strategyEngine,
+            shadowCleanControlSampler = { false },
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(3, extractionEngine.loadCalls)
+        assertEquals(
+            expectedPassUrls(
+                "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
+                "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
+                "https://example.com/p/123" to TOKEN_YALE_SMART,
+            ),
+            extractionEngine.loadedUrls,
+        )
+        assertEquals(listOf("sniffer", "clean_control", "spoof"), repository.lastLoggedAttempts.map { it.phase })
+        val snifferAttempt = repository.lastLoggedAttempts.first()
+        assertEquals(false, snifferAttempt.success)
+        assertEquals("waf_block", snifferAttempt.debugExtractionPath)
+        assertEquals(listOf("vendor_datadome", "block_datadome"), snifferAttempt.detectedTactics)
+        assertEquals("degraded_sniffer_fallback_success", repository.lastLoggedPriceCheck?.outcome)
+        val diagnostics =
+            repository.lastLoggedPriceCheck?.rawExtractionData
+                ?.get("diagnostics")
+                ?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+                .orEmpty()
+        assertTrue(diagnostics.any { it.contains("blocked by WAF", ignoreCase = true) })
     }
 
     @Test

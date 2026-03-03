@@ -57,7 +57,7 @@ class FairPriceRepositoryImpl(
                 priceCheck
             }
             insertSummaryWithFallback(summaryPayload)
-            val retailerIntel = insertRetailerIntel(priceCheck)
+            val retailerIntel = insertRetailerIntel(priceCheck, attempts)
             RunLogResult(
                 attemptsInserted = attemptInsert.isSuccess,
                 attemptInsertError = attemptInsert.exceptionOrNull()?.message,
@@ -146,7 +146,10 @@ class FairPriceRepositoryImpl(
         return Result.failure(lastFailure ?: IllegalStateException("Attempt telemetry insert failed"))
     }
 
-    private suspend fun insertRetailerIntel(priceCheck: PriceCheck): Result<Unit> {
+    private suspend fun insertRetailerIntel(
+        priceCheck: PriceCheck,
+        attempts: List<PriceCheckAttempt>,
+    ): Result<Unit> {
         return runCatching<Unit> {
             val now = Instant.now().toString()
             val retailer = RetailerRow(
@@ -170,22 +173,46 @@ class FairPriceRepositoryImpl(
                 }
             }
 
-            val tactics = extractDetectedTactics(priceCheck)
-            if (tactics.isEmpty()) return@runCatching Unit
-            val sourcePhase = extractTacticSourcePass(priceCheck)
-            val strategyRows = tactics.map { tactic ->
+            val strategyRows =
+                collectRetailerStrategies(priceCheck, attempts).map { observed ->
                 RetailerStrategyRow(
                     retailerDomain = priceCheck.domain,
-                    tactic = tactic,
+                    tactic = observed.tactic,
                     observedAt = now,
-                    sourcePhase = sourcePhase,
+                    sourcePhase = observed.sourcePhase,
                 )
             }
+            if (strategyRows.isEmpty()) return@runCatching Unit
             supabaseClient.postgrest["retailer_strategies"].insert(strategyRows)
             Unit
         }.onFailure { throwable ->
             Log.w(tag, "Retailer intel insert failed; continuing without retailer rows.", throwable)
         }
+    }
+
+    private fun collectRetailerStrategies(
+        priceCheck: PriceCheck,
+        attempts: List<PriceCheckAttempt>,
+    ): List<ObservedTactic> {
+        val observed = linkedSetOf<ObservedTactic>()
+
+        val summarySourcePhase = extractTacticSourcePass(priceCheck)
+        extractDetectedTactics(priceCheck).forEach { tactic ->
+            observed += ObservedTactic(tactic = tactic, sourcePhase = summarySourcePhase)
+        }
+
+        attempts.forEach { attempt ->
+            val sourcePhase = attempt.phase.trim().ifBlank { "sniffer" }
+            attempt.detectedTactics
+                .orEmpty()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { tactic ->
+                    observed += ObservedTactic(tactic = tactic, sourcePhase = sourcePhase)
+                }
+        }
+
+        return observed.toList()
     }
 
     private fun PriceCheck.toLegacyPayload(): PriceCheck {
@@ -274,5 +301,10 @@ class FairPriceRepositoryImpl(
         val lastSeenAt: String,
         @SerialName("active_tracking")
         val activeTracking: Boolean,
+    )
+
+    private data class ObservedTactic(
+        val tactic: String,
+        val sourcePhase: String,
     )
 }

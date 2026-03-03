@@ -1,4 +1,4 @@
-Last Updated: 2026-03-02
+Last Updated: 2026-03-03
 Current Phase: Phase 12 pass architecture update (sniffer + clean-control fallback + single spoof chain) in beta shadow-sampling.
 
 1. Project Overview & Objective
@@ -58,7 +58,12 @@ Shopping Mode Lifecycle: In Shopping Mode, the app keeps the existing VPN/sessio
 
 Graceful Degradation: If sniffer fails, clean-control fallback is attempted. If fallback fails, the app logs degraded terminal telemetry, surfaces clear-net browsing, and shows a non-blocking error message so the user is not stranded. If fallback succeeds and spoof succeeds, run outcome is degraded-success (not full failure).
 
-Telemetry: The app logs per-pass attempt rows with explicit pass identities (`sniffer`, `clean_control`, `spoof`) and summary provenance (`tactic_source_pass`, clean-control execution mode, shadow sampled). Legacy fields remain for compatibility.
+Telemetry: The app logs per-pass attempt rows with explicit pass identities (`sniffer`, `clean_control`, `spoof`) and summary provenance (`tactic_source_pass`, clean-control execution mode, shadow sampled). WAF vendor and block tactics (`vendor_*`, `block_*`) must be captured from both summary and attempt telemetry so `retailer_strategies` can retain negative-feedback data even when fallback succeeds. Legacy fields remain for compatibility.
+
+WAF Negative Feedback Loop:
+- `extractor.js` must classify common WAF vendors (PerimeterX/HUMAN, Datadome, Akamai, Cloudflare) and detect known block pages.
+- Blocked pages must short-circuit extraction and emit `debugExtractionPath = "waf_block"` with detected tactics instead of waiting for generic timeout failure.
+- `HomeViewModel` treats `waf_block` as a failed pre-spoof sniffer outcome and routes to clean-control fallback while preserving sniffer block telemetry.
 
 URL Token Contract (Gecko bootstrap):
 - Pass navigation URLs must include a single `fp_engine` hash token.

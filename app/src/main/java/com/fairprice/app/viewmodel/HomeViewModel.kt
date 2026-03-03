@@ -371,15 +371,22 @@ class HomeViewModel(
                     )
                 }
                 val snifferResult = snifferResultValue
-                if (snifferResult.isFailure) {
-                    val throwable = snifferResult.exceptionOrNull()
+                val snifferCandidate = snifferResult.getOrNull()
+                val snifferWafBlocked = snifferCandidate?.isWafBlockDetected() == true
+                if (snifferResult.isFailure || snifferWafBlocked) {
+                    val throwable = if (snifferResult.isFailure) {
+                        snifferResult.exceptionOrNull()
+                    } else {
+                        IllegalStateException("waf_block detected during Sniffer Pass")
+                    }
+                    snifferExtraction = snifferCandidate
                     attemptRows += buildAttemptRow(
                         phase = PHASE_SNIFFER,
                         attemptIndex = 0,
                         vpnConfig = null,
                         success = false,
                         throwable = throwable,
-                        extracted = null,
+                        extracted = snifferCandidate,
                         latencyMs = snifferLatencyMs,
                         executionUrl = submittedUrl,
                         appliedLevers = buildAppliedLevers(
@@ -388,8 +395,13 @@ class HomeViewModel(
                             trackingProtection = TRACKING_PROTECTION_OFF,
                         ),
                     )
-                    diagnostics += "Sniffer Pass failed: ${throwable.toUserMessage()}"
-                    Log.e(TAG, "Sniffer pass failed", throwable)
+                    if (snifferWafBlocked) {
+                        diagnostics += "Sniffer Pass blocked by WAF. Running Clean Control fallback."
+                        Log.w(TAG, "Sniffer pass returned waf_block; routing to Clean Control fallback.")
+                    } else {
+                        diagnostics += "Sniffer Pass failed: ${throwable.toUserMessage()}"
+                        Log.e(TAG, "Sniffer pass failed", throwable)
+                    }
                     _uiState.update { current ->
                         current.copy(processState = HomeProcessState.Processing("Running Clean Control fallback..."))
                     }
@@ -425,8 +437,13 @@ class HomeViewModel(
                                 trackingProtection = TRACKING_PROTECTION_OFF,
                             ),
                         )
-                        terminalError = "Sniffer Pass failed and Clean Control fallback failed: ${cleanControlThrowable.toUserMessage()}. You can continue shopping manually."
+                        terminalError = "Sniffer pre-spoof stage failed and Clean Control fallback failed: ${cleanControlThrowable.toUserMessage()}. You can continue shopping manually."
                         diagnostics += terminalError.orEmpty()
+                        val failedTactics =
+                            buildList {
+                                addAll(snifferExtraction?.tactics.orEmpty())
+                                addAll(cleanControlExtraction?.tactics.orEmpty())
+                            }.distinct()
                         val failedPreSpoofCheck = buildPriceCheck(
                             url = submittedUrl,
                             strategyId = null,
@@ -434,7 +451,7 @@ class HomeViewModel(
                             baselinePriceCents = 0,
                             foundPriceCents = 0,
                             extractionSuccessful = false,
-                            tactics = emptyList(),
+                            tactics = failedTactics,
                             attemptedConfigs = emptyList(),
                             finalConfig = null,
                             retryCount = 0,
@@ -1547,6 +1564,11 @@ class HomeViewModel(
     private fun isCleanSessionPreparationFailure(throwable: Throwable?): Boolean {
         return throwable is CleanSessionPreparationException ||
             throwable?.cause is CleanSessionPreparationException
+    }
+
+    private fun ExtractionResult.isWafBlockDetected(): Boolean {
+        if (debugExtractionPath.equals("waf_block", ignoreCase = true)) return true
+        return tactics.any { it.startsWith("block_", ignoreCase = true) }
     }
 
     private fun resolveActiveEngineProfile(
