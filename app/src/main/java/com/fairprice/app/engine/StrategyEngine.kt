@@ -42,7 +42,7 @@ class DefaultPricingStrategyEngine(
     override suspend fun determineStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
         val domain = normalizeDomain(url)
         val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
-        val assignmentKey = "$domain|$installationId"
+        val assignmentKey = java.util.UUID.randomUUID().toString()
         val bucket = bucketCalculator(assignmentKey).coerceIn(0, BUCKET_MODULUS - 1)
         val profile = if (bucket < YALE_SMART_PERCENT) EngineProfile.YALE_SMART else EngineProfile.LEGACY
         return Result.success(
