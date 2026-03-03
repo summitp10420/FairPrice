@@ -224,7 +224,14 @@ class HomeViewModelTest {
         )
         val strategyEngine = FakeStrategyEngine(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                    engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
+                    engineSelectionReason = "bucket=23 domain=example.com",
+                    engineSelectionKeyScope = "domain+installation",
+                    engineSelectionBucket = 23,
+                ),
             ),
         )
         val canonicalUrl = "https://www.amazon.com/dp/B0TEST1234"
@@ -263,7 +270,14 @@ class HomeViewModelTest {
         )
         val strategyEngine = FakeStrategyEngine(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                    engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
+                    engineSelectionReason = "bucket=23 domain=example.com",
+                    engineSelectionKeyScope = "domain+installation",
+                    engineSelectionBucket = 23,
+                ),
             ),
         )
         val originalShortUrl = "https://a.co/d/01Ral6wt"
@@ -370,7 +384,14 @@ class HomeViewModelTest {
         )
         val strategyEngine = FakeStrategyEngine(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    wireguardConfig = "wg-test-config",
+                    engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
+                    engineSelectionReason = "bucket=23 domain=example.com",
+                    engineSelectionKeyScope = "domain+installation",
+                    engineSelectionBucket = 23,
+                ),
             ),
         )
         val inputUrl = "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details"
@@ -428,6 +449,22 @@ class HomeViewModelTest {
         assertEquals(
             "strategy",
             attempts[1].appliedLevers?.jsonObject?.get("engine_selection_source")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "domain_installation_bucket_v1_50_50",
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile_policy")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "bucket=23 domain=example.com",
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile_reason")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "domain+installation",
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile_key_scope")?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "23",
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile_bucket")?.jsonPrimitive?.content,
         )
     }
 

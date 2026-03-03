@@ -32,11 +32,14 @@ import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
+        private const val INSTALLATION_PREFS = "fairprice_engine_assignment"
+        private const val INSTALLATION_ID_KEY = "installation_id"
     }
 
     private val repository: FairPriceRepository by lazy {
@@ -46,7 +49,12 @@ class MainActivity : ComponentActivity() {
     private val vpnEngine by lazy { WireguardVpnEngine(applicationContext, vpnConfigStore) }
     private val vpnRotationEngine by lazy { AssetVpnRotationEngine(applicationContext, vpnConfigStore = vpnConfigStore) }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
-    private val strategyEngine by lazy { DefaultPricingStrategyEngine() }
+    private val installationId: String by lazy { getOrCreateInstallationId() }
+    private val strategyEngine by lazy {
+        DefaultPricingStrategyEngine(
+            installationIdProvider = { installationId },
+        )
+    }
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -167,5 +175,14 @@ class MainActivity : ComponentActivity() {
             if (!cursor.moveToFirst()) return@use null
             cursor.getString(nameIndex)
         }
+    }
+
+    private fun getOrCreateInstallationId(): String {
+        val prefs = getSharedPreferences(INSTALLATION_PREFS, MODE_PRIVATE)
+        val existing = prefs.getString(INSTALLATION_ID_KEY, null)?.trim()
+        if (!existing.isNullOrBlank()) return existing
+        val generated = UUID.randomUUID().toString()
+        prefs.edit().putString(INSTALLATION_ID_KEY, generated).apply()
+        return generated
     }
 }
