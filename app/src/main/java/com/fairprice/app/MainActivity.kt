@@ -1,22 +1,15 @@
 package com.fairprice.app
 
-import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -24,16 +17,12 @@ import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.FairPriceRepositoryImpl
 import com.fairprice.app.data.SupabaseClientProvider
 import com.fairprice.app.engine.DefaultPricingStrategyEngine
-import com.fairprice.app.engine.AssetVpnRotationEngine
 import com.fairprice.app.engine.GeckoExtractionEngine
-import com.fairprice.app.engine.SecureVpnConfigStore
-import com.fairprice.app.engine.WireguardVpnEngine
 import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
 import java.util.Locale
 import java.util.UUID
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -45,38 +34,12 @@ class MainActivity : ComponentActivity() {
     private val repository: FairPriceRepository by lazy {
         FairPriceRepositoryImpl(SupabaseClientProvider.client)
     }
-    private val vpnConfigStore by lazy { SecureVpnConfigStore(applicationContext) }
-    private val vpnEngine by lazy { WireguardVpnEngine(applicationContext, vpnConfigStore) }
-    private val vpnRotationEngine by lazy { AssetVpnRotationEngine(applicationContext, vpnConfigStore = vpnConfigStore) }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
     private val installationId: String by lazy { getOrCreateInstallationId() }
     private val strategyEngine by lazy {
         DefaultPricingStrategyEngine(
             installationIdProvider = { installationId },
         )
-    }
-
-    private val vpnPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        homeViewModel.onVpnPermissionResult(result.resultCode == Activity.RESULT_OK)
-    }
-
-    private val importVpnConfigLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
-        }
-        val displayName = resolveDisplayName(uri) ?: "Imported VPN Config"
-        val rawConfig = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-        if (!rawConfig.isNullOrBlank()) {
-            homeViewModel.onVpnConfigImportReceived(displayName, rawConfig)
-        }
     }
 
     private val homeViewModel: HomeViewModel by viewModels {
@@ -86,9 +49,6 @@ class MainActivity : ComponentActivity() {
                 if (modelClass.isAssignableFrom(HomeViewModel::class.java)) {
                     return HomeViewModel(
                         repository = repository,
-                        vpnEngine = vpnEngine,
-                        vpnConfigStore = vpnConfigStore,
-                        vpnRotationEngine = vpnRotationEngine,
                         extractionEngine = extractionEngine,
                         strategyEngine = strategyEngine,
                         isAdminUser = BuildConfig.DEBUG,
@@ -109,13 +69,6 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         handleSendIntent(intent)
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                homeViewModel.vpnPermissionRequests.collect { permissionIntent ->
-                    vpnPermissionLauncher.launch(permissionIntent)
-                }
-            }
-        }
 
         setContent {
             FairPriceTheme {
@@ -132,11 +85,6 @@ class MainActivity : ComponentActivity() {
                             onDirtyBaselineChanged = homeViewModel::onDirtyBaselineInputChanged,
                             onUrlChanged = homeViewModel::onUrlInputChanged,
                             onCheckPriceClicked = homeViewModel::onCheckPriceClicked,
-                            onImportVpnConfigClicked = {
-                                importVpnConfigLauncher.launch(arrayOf("text/plain", "*/*"))
-                            },
-                            onSetBaselineConfigClicked = homeViewModel::onSetBaselineConfigClicked,
-                            onToggleUserConfigEnabled = homeViewModel::onToggleUserConfigEnabled,
                             onAdminEngineOverrideChanged = homeViewModel::onEngineOverrideChanged,
                             onEnterShoppingMode = homeViewModel::onEnterShoppingMode,
                             onBackToApp = homeViewModel::onBackToApp,
@@ -165,15 +113,6 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
             homeViewModel.onSharedTextReceived(sharedText)
-        }
-    }
-
-    private fun resolveDisplayName(uri: Uri): String? {
-        return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (nameIndex == -1) return@use null
-            if (!cursor.moveToFirst()) return@use null
-            cursor.getString(nameIndex)
         }
     }
 

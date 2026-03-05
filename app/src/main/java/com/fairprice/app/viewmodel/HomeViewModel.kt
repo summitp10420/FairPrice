@@ -1,6 +1,5 @@
 package com.fairprice.app.viewmodel
 
-import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fairprice.app.coordinator.DefaultPriceCheckCoordinator
@@ -8,24 +7,16 @@ import com.fairprice.app.coordinator.PreSpoofStageRunner
 import com.fairprice.app.coordinator.PriceCheckCoordinator
 import com.fairprice.app.coordinator.SpoofAttemptRunner
 import com.fairprice.app.coordinator.TelemetryAssembler
-import com.fairprice.app.coordinator.model.CoordinatorCommand
 import com.fairprice.app.coordinator.model.CoordinatorProcessState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.PricingStrategyEngine
-import com.fairprice.app.engine.VpnConfigRecord
-import com.fairprice.app.engine.VpnConfigStore
-import com.fairprice.app.engine.VpnEngine
-import com.fairprice.app.engine.VpnRotationEngine
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -74,35 +65,12 @@ data class HomeUiState(
     val processState: HomeProcessState = HomeProcessState.Idle,
     val activeSession: GeckoSession? = null,
     val showBrowser: Boolean = false,
-    val userVpnConfigs: List<VpnConfigRecord> = emptyList(),
-    val baselineConfigId: String? = null,
     val isAdmin: Boolean = false,
     val adminEngineOverride: EngineOverride = EngineOverride.AUTO,
 )
 
 class HomeViewModel(
     private val repository: FairPriceRepository,
-    private val vpnEngine: VpnEngine,
-    private val vpnConfigStore: VpnConfigStore = object : VpnConfigStore {
-        override fun listUserConfigs() = emptyList<com.fairprice.app.engine.VpnConfigRecord>()
-        override fun listEnabledUserConfigs() = emptyList<com.fairprice.app.engine.VpnConfigRecord>()
-        override fun readUserConfigText(configId: String): Result<String> {
-            return Result.failure(IllegalStateException("User VPN config store unavailable."))
-        }
-        override fun importUserConfig(displayName: String, rawConfigText: String) =
-            Result.failure<com.fairprice.app.engine.VpnConfigRecord>(
-                IllegalStateException("User VPN config store unavailable."),
-            )
-        override fun setUserConfigEnabled(configId: String, enabled: Boolean): Result<Unit> =
-            Result.success(Unit)
-        override fun getBaselineConfigId(): String? = null
-        override fun setBaselineConfigId(configId: String): Result<Unit> = Result.success(Unit)
-    },
-    private val vpnRotationEngine: VpnRotationEngine = object : VpnRotationEngine {
-        override fun availableConfigs(): List<String> = emptyList()
-        override fun nextConfig(excludedConfigs: Set<String>): String? = null
-        override fun reportAttemptResult(config: String, success: Boolean) = Unit
-    },
     private val extractionEngine: ExtractionEngine,
     private val strategyEngine: PricingStrategyEngine,
     private val isAdminUser: Boolean = false,
@@ -142,16 +110,13 @@ class HomeViewModel(
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
-    private val _vpnPermissionRequests = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
-    val vpnPermissionRequests: SharedFlow<Intent> = _vpnPermissionRequests.asSharedFlow()
 
-    private val telemetryAssembler = TelemetryAssembler(vpnConfigStore)
+    private val telemetryAssembler = TelemetryAssembler()
     private val coordinator: PriceCheckCoordinator =
         DefaultPriceCheckCoordinator(
             scope = viewModelScope,
             repository = repository,
             strategyEngine = strategyEngine,
-            vpnEngine = vpnEngine,
             telemetryAssembler = telemetryAssembler,
             preSpoofStageRunner = PreSpoofStageRunner(
                 extractionEngine = extractionEngine,
@@ -159,8 +124,6 @@ class HomeViewModel(
                 shadowCleanControlSampler = shadowCleanControlSampler,
             ),
             spoofAttemptRunner = SpoofAttemptRunner(
-                vpnEngine = vpnEngine,
-                vpnRotationEngine = vpnRotationEngine,
                 extractionEngine = extractionEngine,
                 telemetryAssembler = telemetryAssembler,
             ),
@@ -190,14 +153,6 @@ class HomeViewModel(
                 }
             }
         }
-        viewModelScope.launch {
-            coordinator.commands.collect { command ->
-                when (command) {
-                    is CoordinatorCommand.RequestVpnPermission -> _vpnPermissionRequests.tryEmit(command.intent)
-                }
-            }
-        }
-        refreshVpnConfigs()
     }
 
     fun onUrlInputChanged(value: String) {
@@ -214,40 +169,6 @@ class HomeViewModel(
         if (extractedUrl.isNotBlank()) {
             _uiState.update { current -> current.copy(urlInput = extractedUrl) }
         }
-    }
-
-    fun onVpnConfigImportReceived(fileName: String, rawConfigText: String) {
-        val result = vpnConfigStore.importUserConfig(fileName, rawConfigText)
-        if (result.isFailure) {
-            val message = "VPN config import failed: ${result.exceptionOrNull().toUserMessage()}"
-            _uiState.update { current -> current.copy(processState = HomeProcessState.Error(message)) }
-            return
-        }
-        val imported = result.getOrThrow()
-        _uiState.update {
-            it.copy(processState = HomeProcessState.Processing("Imported VPN config: ${imported.displayName}"))
-        }
-        refreshVpnConfigs()
-    }
-
-    fun onSetBaselineConfigClicked(configId: String) {
-        val result = vpnConfigStore.setBaselineConfigId(configId)
-        if (result.isFailure) {
-            val message = "Failed to set baseline config: ${result.exceptionOrNull().toUserMessage()}"
-            _uiState.update { it.copy(processState = HomeProcessState.Error(message)) }
-            return
-        }
-        refreshVpnConfigs()
-    }
-
-    fun onToggleUserConfigEnabled(configId: String, enabled: Boolean) {
-        val result = vpnConfigStore.setUserConfigEnabled(configId, enabled)
-        if (result.isFailure) {
-            val message = "Failed to update VPN config: ${result.exceptionOrNull().toUserMessage()}"
-            _uiState.update { it.copy(processState = HomeProcessState.Error(message)) }
-            return
-        }
-        refreshVpnConfigs()
     }
 
     fun onEngineOverrideChanged(override: EngineOverride) {
@@ -277,10 +198,6 @@ class HomeViewModel(
                 isAdmin = _uiState.value.isAdmin,
             ),
         )
-    }
-
-    fun onVpnPermissionResult(granted: Boolean) {
-        coordinator.onVpnPermissionResult(granted)
     }
 
     fun onEnterShoppingMode() {
@@ -313,27 +230,11 @@ class HomeViewModel(
         return regex.find(value)?.value
     }
 
-    private fun refreshVpnConfigs() {
-        val configs = vpnConfigStore.listUserConfigs()
-        val baseline = vpnConfigStore.getBaselineConfigId()
-        _uiState.update { current ->
-            current.copy(
-                userVpnConfigs = configs,
-                baselineConfigId = baseline,
-            )
-        }
-    }
-
     private fun sanitizeDigitsOnly(value: String): String = value.filter(Char::isDigit)
 
     private fun parseDirtyBaselineCents(raw: String): Int? {
         val normalized = sanitizeDigitsOnly(raw)
         if (normalized.isBlank()) return null
         return normalized.toIntOrNull()
-    }
-
-    private fun Throwable?.toUserMessage(): String {
-        val throwable = this ?: return "Unknown error"
-        return throwable.message ?: throwable::class.java.simpleName
     }
 }

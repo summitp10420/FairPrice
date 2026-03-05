@@ -6,7 +6,6 @@ import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.StrategyResult
-import com.fairprice.app.engine.VpnConfigStore
 import com.fairprice.app.viewmodel.SummaryData
 import java.net.URI
 import java.util.Locale
@@ -16,11 +15,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-class TelemetryAssembler(
-    private val vpnConfigStore: VpnConfigStore,
-) {
+class TelemetryAssembler {
     companion object {
-        private const val USER_CONFIG_PREFIX = "user:"
+        internal const val CLEAR_NET = "clear_net"
+        internal const val CLEAR_NET_DISPLAY = "Clear Net"
         private const val ENGINE_VERSION = "11.5a"
         private const val ENGINE_BUILD_ID = "local-dev"
         private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
@@ -176,7 +174,6 @@ class TelemetryAssembler(
         diagnostics: List<String>,
         lifetimePotentialSavingsCents: Int,
         strategyName: String,
-        baselineConfigId: String?,
     ): SummaryData {
         val snifferPrice = snifferResult?.priceCents?.let(::formatUsd) ?: "N/A"
         val cleanControlPrice = cleanControlResult?.priceCents?.let(::formatUsd)
@@ -186,10 +183,9 @@ class TelemetryAssembler(
         val deployedConfigDisplay = displayConfigLabel(finalConfig)
         val attemptedDisplay = attemptedConfigs.map(::displayConfigLabel)
         val finalDisplay = displayConfigLabel(finalConfig)
-        val baselineDisplay = baselineConfigId?.let(::displayConfigLabel) ?: "Not set"
         return SummaryData(
             lifetimePotentialSavings = formatUsd(lifetimePotentialSavingsCents),
-            baselineConfig = baselineDisplay,
+            baselineConfig = "Not set",
             outcome = outcome,
             snifferPrice = snifferPrice,
             cleanControlPrice = cleanControlPrice,
@@ -210,33 +206,14 @@ class TelemetryAssembler(
         )
     }
 
-    fun resolveBaselineConfigId(): String? {
-        val baseline = vpnConfigStore.getBaselineConfigId()
-        return baseline?.takeIf { it.isNotBlank() }
-    }
-
     fun resolveConfigSource(configId: String?): String? {
         if (configId.isNullOrBlank()) return null
-        return if (configId.startsWith(USER_CONFIG_PREFIX)) "user" else "asset"
+        return if (configId == CLEAR_NET) "clear_net" else "asset"
     }
 
     fun resolveConfigProvider(configId: String?): String? {
         if (configId.isNullOrBlank()) return null
-        if (configId.startsWith(USER_CONFIG_PREFIX)) {
-            return vpnConfigStore.listUserConfigs().firstOrNull { it.id == configId }?.providerHint ?: "unknown"
-        }
-        return inferProviderFromAssetConfigName(configId)
-    }
-
-    private fun inferProviderFromAssetConfigName(configName: String): String {
-        val normalized = configName.lowercase(Locale.US)
-        return when {
-            "proton" in normalized -> "proton"
-            "surfshark" in normalized -> "surfshark"
-            "mullvad" in normalized -> "mullvad"
-            "nord" in normalized -> "nordvpn"
-            else -> "asset"
-        }
+        return if (configId == CLEAR_NET) "clear_net" else "asset"
     }
 
     private fun formatUsd(cents: Int): String {
@@ -244,15 +221,7 @@ class TelemetryAssembler(
     }
 
     private fun displayConfigLabel(configId: String): String {
-        if (configId.startsWith(USER_CONFIG_PREFIX)) {
-            val importedDisplayName = vpnConfigStore.listUserConfigs().firstOrNull { it.id == configId }?.displayName ?: configId
-            return trimConfSuffix(importedDisplayName)
-        }
-        return trimConfSuffix(configId)
-    }
-
-    private fun trimConfSuffix(value: String): String {
-        return value.removeSuffix(".conf").trim()
+        return if (configId == CLEAR_NET) CLEAR_NET_DISPLAY else configId.removeSuffix(".conf").trim()
     }
 
     private fun EngineProfile.toTelemetryValue(): String {

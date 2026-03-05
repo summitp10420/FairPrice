@@ -1,25 +1,19 @@
 package com.fairprice.app.coordinator
 
 import android.util.Log
-import com.fairprice.app.coordinator.model.CoordinatorCommand
 import com.fairprice.app.coordinator.model.CoordinatorProcessState
 import com.fairprice.app.coordinator.model.CoordinatorState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.engine.EngineProfile
-import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.PricingStrategyEngine
 import com.fairprice.app.engine.StrategyResult
-import com.fairprice.app.engine.VpnEngine
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -29,7 +23,6 @@ class DefaultPriceCheckCoordinator(
     private val scope: CoroutineScope,
     private val repository: FairPriceRepository,
     private val strategyEngine: PricingStrategyEngine,
-    private val vpnEngine: VpnEngine,
     private val telemetryAssembler: TelemetryAssembler,
     private val preSpoofStageRunner: PreSpoofStageRunner,
     private val spoofAttemptRunner: SpoofAttemptRunner,
@@ -48,13 +41,6 @@ class DefaultPriceCheckCoordinator(
     private val _state = MutableStateFlow(CoordinatorState())
     override val state: StateFlow<CoordinatorState> = _state.asStateFlow()
 
-    private val _commands = MutableSharedFlow<CoordinatorCommand>(extraBufferCapacity = 1)
-    override val commands: SharedFlow<CoordinatorCommand> = _commands.asSharedFlow()
-
-    private var shoppingVpnActive: Boolean = false
-    private var activeVpnConfig: String? = null
-    private var pendingContinuation: PendingContinuationContext? = null
-
     override fun startPriceCheck(params: StartPriceCheckParams) {
         val rawSubmittedUrl = params.rawSubmittedUrl.trim()
         _state.update { it.copy(processState = CoordinatorProcessState.Idle, showBrowser = false) }
@@ -63,24 +49,9 @@ class DefaultPriceCheckCoordinator(
         scope.launch {
             var terminalError: String? = null
             var successSummary: com.fairprice.app.viewmodel.SummaryData? = null
-            var vpnConnectedThisRun = false
-            var keepVpnForShopping = false
             var finalShowBrowser = false
-            var awaitingVpnPermission = false
 
             try {
-                pendingContinuation = null
-                if (shoppingVpnActive) {
-                    val disconnectResult = spoofAttemptRunner.disconnectVpn()
-                    if (disconnectResult.isFailure) {
-                        val throwable = disconnectResult.exceptionOrNull()
-                        terminalError = "VPN disconnect failed before new check: ${throwable.toUserMessage()}"
-                        Log.e(TAG, "VPN disconnect failed before restart", throwable)
-                        return@launch
-                    }
-                    shoppingVpnActive = false
-                }
-
                 val submittedUrl = canonicalizeUrlIfNeeded(rawSubmittedUrl)
                 val preSpoof = preSpoofStageRunner.run(
                     submittedUrl = submittedUrl,
@@ -183,198 +154,33 @@ class DefaultPriceCheckCoordinator(
                             EngineProfile.YALE_SMART -> sanitizeUrlForSpoof(submittedUrl)
                         }
 
-                        when (
-                            val spoofResult = spoofAttemptRunner.execute(
-                                strategy = strategy,
-                                engineProfile = profileResolution.profile,
-                                engineSelectionSource = profileResolution.selectionSource,
-                                spoofExecutionUrl = spoofUrlPlan.url,
-                                spoofUrlSanitized = spoofUrlPlan.wasSanitized,
-                                attemptedConfigs = emptyList(),
-                                attemptRows = preSpoof.attemptRows,
-                                diagnostics = preSpoof.diagnostics,
-                                onProcessing = ::emitProcessing,
-                                throwableToMessage = { it.toUserMessage() },
-                            )
-                        ) {
-                            is SpoofAttemptRunner.Result.AwaitingPermission -> {
-                                pendingContinuation = PendingContinuationContext(
-                                    submittedUrl = submittedUrl,
-                                    preSpoof = preSpoof,
-                                    strategy = strategy,
-                                    dirtyBaselinePriceCents = params.dirtyBaselinePriceCents,
-                                    pending = spoofResult.pending,
-                                )
-                                emitProcessing("Waiting for VPN permission...")
-                                _commands.tryEmit(
-                                    CoordinatorCommand.RequestVpnPermission(spoofResult.intent),
-                                )
-                                awaitingVpnPermission = true
-                                return@launch
-                            }
-
-                            is SpoofAttemptRunner.Result.Completed -> {
-                                vpnConnectedThisRun = spoofResult.vpnConnectedThisRun
-                                activeVpnConfig = spoofResult.activeVpnConfig
-                                val completion = completeRunAfterSpoof(
-                                    submittedUrl = submittedUrl,
-                                    preSpoof = preSpoof,
-                                    strategy = strategy,
-                                    dirtyBaselinePriceCents = params.dirtyBaselinePriceCents,
-                                    spoofResult = spoofResult,
-                                )
-                                terminalError = completion.terminalError
-                                successSummary = completion.successSummary
-                                keepVpnForShopping = completion.keepVpnForShopping
-                                finalShowBrowser = completion.finalShowBrowser
-                            }
-                        }
-                    }
-                }
-            } finally {
-                if (!awaitingVpnPermission) {
-                    if (vpnConnectedThisRun && !keepVpnForShopping) {
-                        val disconnectResult = spoofAttemptRunner.disconnectVpn()
-                        if (disconnectResult.isFailure) {
-                            val throwable = disconnectResult.exceptionOrNull()
-                            val disconnectMessage = "VPN disconnect failed: ${throwable.toUserMessage()}"
-                            Log.e(TAG, "VPN disconnect failed", throwable)
-                            terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
-                        }
-                        shoppingVpnActive = false
-                    }
-                    _state.update {
-                        it.copy(
-                            showBrowser = finalShowBrowser,
-                            processState = terminalError?.let(CoordinatorProcessState::Error)
-                                ?: successSummary?.let(CoordinatorProcessState::Success)
-                                ?: CoordinatorProcessState.Idle,
+                        val spoofResult = spoofAttemptRunner.execute(
+                            strategy = strategy,
+                            engineProfile = profileResolution.profile,
+                            engineSelectionSource = profileResolution.selectionSource,
+                            spoofExecutionUrl = spoofUrlPlan.url,
+                            spoofUrlSanitized = spoofUrlPlan.wasSanitized,
+                            attemptRows = preSpoof.attemptRows,
+                            diagnostics = preSpoof.diagnostics,
+                            onProcessing = ::emitProcessing,
+                            throwableToMessage = { it.toUserMessage() },
                         )
-                    }
-                }
-            }
-        }
-    }
-
-    override fun onVpnPermissionResult(granted: Boolean) {
-        val pending = pendingContinuation ?: return
-        pendingContinuation = null
-
-        if (!granted) {
-            val diagnostics = pending.pending.diagnostics.toMutableList().apply {
-                add("VPN permission denied. Continuing without VPN optimization.")
-            }
-            val attemptRows = pending.pending.attemptRows.toMutableList().apply {
-                add(
-                    telemetryAssembler.buildAttemptRow(
-                        phase = PHASE_SPOOF,
-                        attemptIndex = pending.pending.attemptIndex + 1,
-                        vpnConfig = pending.pending.waitingConfig,
-                        success = false,
-                        throwable = IllegalStateException("vpn_permission_denied"),
-                        extracted = null,
-                        latencyMs = 0L,
-                        executionUrl = pending.pending.spoofExecutionUrl,
-                        appliedLevers = telemetryAssembler.buildAppliedLevers(
-                            urlSanitized = pending.pending.spoofUrlSanitized,
-                            amnesiaProtocol = false,
-                            trackingProtection = if (pending.pending.spoofEngineProfile == EngineProfile.YALE_SMART) "strict" else "off",
-                            strategy = pending.strategy,
-                            engineProfile = pending.pending.spoofEngineProfile,
-                            engineSelectionSource = pending.pending.spoofEngineSelectionSource,
-                        ),
-                    ),
-                )
-            }
-            scope.launch {
-                val deniedPriceCheck = telemetryAssembler.buildPriceCheck(
-                    url = pending.submittedUrl,
-                    strategyId = pending.strategy.strategyId,
-                    strategyName = pending.strategy.strategyName,
-                    baselinePriceCents = pending.preSpoof.tacticSourceExtraction.priceCents,
-                    foundPriceCents = pending.preSpoof.tacticSourceExtraction.priceCents,
-                    extractionSuccessful = false,
-                    tactics = pending.preSpoof.tacticSourceExtraction.tactics,
-                    attemptedConfigs = pending.pending.attemptedConfigs,
-                    finalConfig = null,
-                    retryCount = telemetryAssembler.retryCountFromAttempts(attemptRows),
-                    outcome = "vpn_permission_denied",
-                    degraded = true,
-                    baselineSuccess = true,
-                    spoofSuccess = false,
-                    dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
-                    diagnostics = diagnostics,
-                    snifferPriceCents = pending.preSpoof.snifferExtraction?.priceCents,
-                    cleanControlPriceCents = pending.preSpoof.cleanControlExtraction?.priceCents,
-                    tacticSourcePass = pending.preSpoof.tacticSourcePass,
-                    cleanControlExecutionMode = pending.preSpoof.cleanControlExecutionMode,
-                    shadowSampled = pending.preSpoof.shadowSampled,
-                )
-                val deniedLogResult = repository.logPriceCheckRun(deniedPriceCheck, attemptRows)
-                if (deniedLogResult.isSuccess) {
-                    diagnostics += telemetryAssembler.logResultDiagnostics(deniedLogResult.getOrThrow())
-                }
-                _state.update {
-                    it.copy(
-                        showBrowser = true,
-                        processState = CoordinatorProcessState.Error(
-                            "VPN permission denied. Continuing without VPN optimization.",
-                        ),
-                    )
-                }
-            }
-            return
-        }
-
-        scope.launch {
-            var terminalError: String? = null
-            var successSummary: com.fairprice.app.viewmodel.SummaryData? = null
-            var vpnConnectedThisRun = false
-            var keepVpnForShopping = false
-            try {
-                when (
-                    val continuationResult = spoofAttemptRunner.continueAfterPermission(
-                        pending = pending.pending,
-                        onProcessing = ::emitProcessing,
-                        throwableToMessage = { it.toUserMessage() },
-                    )
-                ) {
-                    is SpoofAttemptRunner.Result.AwaitingPermission -> {
-                        pendingContinuation = pending.copy(pending = continuationResult.pending)
-                        emitProcessing("Waiting for VPN permission...")
-                        _commands.tryEmit(CoordinatorCommand.RequestVpnPermission(continuationResult.intent))
-                        return@launch
-                    }
-
-                    is SpoofAttemptRunner.Result.Completed -> {
-                        vpnConnectedThisRun = continuationResult.vpnConnectedThisRun
-                        activeVpnConfig = continuationResult.activeVpnConfig
                         val completion = completeRunAfterSpoof(
-                            submittedUrl = pending.submittedUrl,
-                            preSpoof = pending.preSpoof,
-                            strategy = pending.strategy,
-                            dirtyBaselinePriceCents = pending.dirtyBaselinePriceCents,
-                            spoofResult = continuationResult,
+                            submittedUrl = submittedUrl,
+                            preSpoof = preSpoof,
+                            strategy = strategy,
+                            dirtyBaselinePriceCents = params.dirtyBaselinePriceCents,
+                            spoofResult = spoofResult,
                         )
                         terminalError = completion.terminalError
                         successSummary = completion.successSummary
-                        keepVpnForShopping = completion.keepVpnForShopping
+                        finalShowBrowser = completion.finalShowBrowser
                     }
                 }
             } finally {
-                if (vpnConnectedThisRun && !keepVpnForShopping) {
-                    val disconnectResult = spoofAttemptRunner.disconnectVpn()
-                    if (disconnectResult.isFailure) {
-                        val throwable = disconnectResult.exceptionOrNull()
-                        val disconnectMessage = "VPN disconnect failed: ${throwable.toUserMessage()}"
-                        terminalError = terminalError?.let { "$it | $disconnectMessage" } ?: disconnectMessage
-                    }
-                    shoppingVpnActive = false
-                }
-
                 _state.update {
                     it.copy(
-                        showBrowser = false,
+                        showBrowser = finalShowBrowser,
                         processState = terminalError?.let(CoordinatorProcessState::Error)
                             ?: successSummary?.let(CoordinatorProcessState::Success)
                             ?: CoordinatorProcessState.Idle,
@@ -393,32 +199,13 @@ class DefaultPriceCheckCoordinator(
     }
 
     override fun onCloseShoppingSession() {
-        scope.launch {
-            var terminalError: String? = null
-            val baselineError = ensureBaselineVpnActive()
-            if (baselineError != null) {
-                terminalError = baselineError
-            } else {
-                shoppingVpnActive = false
-            }
-            _state.update {
-                it.copy(
-                    showBrowser = false,
-                    processState = terminalError?.let(CoordinatorProcessState::Error) ?: CoordinatorProcessState.Idle,
-                )
-            }
+        _state.update {
+            it.copy(showBrowser = false, processState = CoordinatorProcessState.Idle)
         }
     }
 
     override fun onAppClosing() {
-        scope.launch {
-            val baselineError = ensureBaselineVpnActive()
-            if (baselineError != null) {
-                Log.e(TAG, baselineError)
-            } else {
-                shoppingVpnActive = false
-            }
-        }
+        // No VPN to disconnect; no-op on clear-net.
     }
 
     private suspend fun completeRunAfterSpoof(
@@ -465,7 +252,6 @@ class DefaultPriceCheckCoordinator(
             return CompletionResult(
                 terminalError = terminalError,
                 successSummary = null,
-                keepVpnForShopping = false,
                 finalShowBrowser = false,
             )
         }
@@ -507,7 +293,6 @@ class DefaultPriceCheckCoordinator(
             return CompletionResult(
                 terminalError = "Supabase log failed: ${throwable.toUserMessage()}",
                 successSummary = null,
-                keepVpnForShopping = false,
                 finalShowBrowser = false,
             )
         }
@@ -534,13 +319,10 @@ class DefaultPriceCheckCoordinator(
             diagnostics = diagnostics,
             lifetimePotentialSavingsCents = lifetimeSavingsCents,
             strategyName = strategy.strategyName,
-            baselineConfigId = telemetryAssembler.resolveBaselineConfigId(),
         )
-        shoppingVpnActive = true
         return CompletionResult(
             terminalError = null,
             successSummary = successSummary,
-            keepVpnForShopping = true,
             finalShowBrowser = false,
         )
     }
@@ -602,20 +384,6 @@ class DefaultPriceCheckCoordinator(
         }
     }
 
-    private suspend fun ensureBaselineVpnActive(): String? {
-        val baselineId = telemetryAssembler.resolveBaselineConfigId()
-            ?: return "No baseline VPN config selected. Set a baseline in Manage VPN."
-        val connectResult = vpnEngine.connect(baselineId)
-        if (connectResult.isFailure) {
-            val throwable = connectResult.exceptionOrNull()
-            Log.e(TAG, "Failed to revert VPN to baseline config", throwable)
-            return "Failed to revert VPN to baseline: ${throwable.toUserMessage()}"
-        }
-        activeVpnConfig = baselineId
-        Log.i(TAG, "Reverted VPN to baseline config: $baselineId")
-        return null
-    }
-
     private fun emitProcessing(message: String) {
         _state.update { it.copy(processState = CoordinatorProcessState.Processing(message)) }
     }
@@ -624,14 +392,6 @@ class DefaultPriceCheckCoordinator(
         val throwable = this ?: return "Unknown error"
         return throwable.message ?: throwable::class.java.simpleName
     }
-
-    private data class PendingContinuationContext(
-        val submittedUrl: String,
-        val preSpoof: PreSpoofStageRunner.Result.Success,
-        val strategy: StrategyResult,
-        val dirtyBaselinePriceCents: Int?,
-        val pending: SpoofAttemptRunner.PendingVpnContinuation,
-    )
 
     private data class ActiveEngineProfile(
         val profile: EngineProfile,
@@ -646,7 +406,6 @@ class DefaultPriceCheckCoordinator(
     private data class CompletionResult(
         val terminalError: String?,
         val successSummary: com.fairprice.app.viewmodel.SummaryData?,
-        val keepVpnForShopping: Boolean,
         val finalShowBrowser: Boolean,
     )
 }
