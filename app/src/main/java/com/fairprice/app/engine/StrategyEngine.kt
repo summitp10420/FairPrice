@@ -2,14 +2,27 @@ package com.fairprice.app.engine
 
 import java.net.URI
 import java.util.Locale
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
+/**
+ * Strategy resolution interface. The app depends on this abstraction.
+ * The strategy engine lives on Railway; implementations may call Railway or use a local fallback.
+ * See DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD.
+ */
+interface StrategyResolver {
+    suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult>
+}
+
+@Serializable
 enum class EngineProfile {
     LEGACY,
     YALE_SMART,
 }
 
+@Serializable
 data class StrategyResult(
-    val strategyId: String?,
+    val strategyId: String? = null,
     val strategyName: String = "clean_strategy_v1.0",
     val strategyEngineName: String = "strategy_engine_v1.0",
     val strategyVersion: String = "1.0",
@@ -19,18 +32,20 @@ data class StrategyResult(
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
     val engineSelectionBucket: Int? = null,
+    /** Reserved for Sprint 14 residential proxies. */
+    val proxyConfig: JsonObject? = null,
 )
 
-interface PricingStrategyEngine {
-    suspend fun determineStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult>
-}
-
-class DefaultPricingStrategyEngine(
+/**
+ * Local strategy fallback. Used when the Railway strategy engine is unreachable.
+ * Not an engine — it provides a strategy so the spoof run can proceed.
+ */
+class LocalStrategyFallback(
     private val installationIdProvider: () -> String = { DEFAULT_INSTALLATION_ID },
     private val bucketCalculator: (String) -> Int = { assignmentKey ->
         (assignmentKey.hashCode() and Int.MAX_VALUE) % BUCKET_MODULUS
     },
-) : PricingStrategyEngine {
+) : StrategyResolver {
     companion object {
         private const val DEFAULT_INSTALLATION_ID = "default_installation"
         private const val BUCKET_MODULUS = 100
@@ -39,10 +54,10 @@ class DefaultPricingStrategyEngine(
         private const val ENGINE_SELECTION_SCOPE = "domain+installation"
     }
 
-    override suspend fun determineStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
+    override suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
         val domain = normalizeDomain(url)
         val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
-        val assignmentKey = java.util.UUID.randomUUID().toString()
+        val assignmentKey = "$domain|$installationId"
         val bucket = bucketCalculator(assignmentKey).coerceIn(0, BUCKET_MODULUS - 1)
         val profile = if (bucket < YALE_SMART_PERCENT) EngineProfile.YALE_SMART else EngineProfile.LEGACY
         return Result.success(

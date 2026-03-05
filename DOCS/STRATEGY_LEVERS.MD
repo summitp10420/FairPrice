@@ -1,4 +1,4 @@
-Last Updated: 2026-03-03
+Last Updated: 2026-03-05
 Owner: FairPrice product/engineering
 Status: Living document (update every phase)
 
@@ -14,7 +14,7 @@ It is designed to:
 A strategy run is a combination of lever decisions.
 
 Example:
-- VPN lever decides location/IP identity.
+- Remote Strategy Resolution lever (Sprint 13): Railway engine decides which strategy to send; app executes. See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
 - Session lever decides browser freshness and retry behavior.
 - Extraction lever decides how price/tactic data is captured.
 - Policy lever decides rotation, retries, cooldowns, and fallback path.
@@ -23,7 +23,31 @@ The goal is to identify which combinations produce consistent savings by retaile
 
 3. Lever Catalog
 
-3.1 VPN Config Pool Management Lever
+3.0 Remote Strategy Resolution Lever (Sprint 13)
+What it controls:
+- Where strategy decisions are made (Railway backend).
+- How the app obtains a strategy (RailwayStrategyClient + LocalStrategyFallback).
+
+Approaches:
+- Railway strategy engine returns StrategyResult from (domain, tactics, anonymous_bucket).
+- App receives, loads, and executes. No decision-making on the client.
+
+Actions:
+- Call Railway POST /api/v1/strategy.
+- On timeout/unreachable: use LocalStrategyFallback.
+- Execute returned strategy (engine profile, URL token, proxy config when available).
+
+Policy knobs:
+- Endpoint URL.
+- Timeout duration.
+- Fallback strategy (e.g., conservative LEGACY or YALE_SMART).
+
+Key telemetry:
+- Railway call success/failure.
+- Strategy source (railway vs fallback).
+- engineSelectionPolicy, engineProfile from StrategyResult.
+
+3.1 VPN Config Pool Management Lever [DEPRECATED for clear-net phase]
 What it controls:
 - Which WireGuard configs are available, active, and eligible for rotation.
 
@@ -53,7 +77,7 @@ Key telemetry:
 - Median connection + extraction latency.
 - Savings contribution by config.
 
-3.2 VPN Rotation Policy Lever
+3.2 VPN Rotation Policy Lever [DEPRECATED for clear-net phase]
 What it controls:
 - How configs are selected across spoof attempts.
 
@@ -81,7 +105,7 @@ Key telemetry:
 - Time to first success.
 - Win rate by rotation policy.
 
-3.3 Baseline Identity Lever
+3.3 Baseline Identity Lever [DEPRECATED for clear-net phase]
 What it controls:
 - What "normal" user context is used outside active spoof attempts.
 

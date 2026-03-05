@@ -9,7 +9,7 @@ import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.CleanSessionPreparationException
 import com.fairprice.app.engine.EngineProfile
-import com.fairprice.app.engine.PricingStrategyEngine
+import com.fairprice.app.engine.StrategyResolver
 import com.fairprice.app.engine.StrategyResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -70,21 +70,21 @@ class HomeViewModelTest {
                 ),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.failure(IllegalStateException("no strategy match")),
         )
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(1, strategyEngine.determineCalls)
-        assertEquals(listOf("hidden_canvas"), strategyEngine.lastBaselineTactics)
+        assertEquals(1, strategyResolver.resolveCalls)
+        assertEquals(listOf("hidden_canvas"), strategyResolver.lastBaselineTactics)
         assertEquals(1, extractionEngine.loadCalls)
         assertEquals(1, repository.logCalls)
 
@@ -113,7 +113,7 @@ class HomeViewModelTest {
                 ),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = "strat_test_123",
@@ -124,15 +124,15 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(1, strategyEngine.determineCalls)
-        assertEquals(listOf("cookie_tracking"), strategyEngine.lastBaselineTactics)
+        assertEquals(1, strategyResolver.resolveCalls)
+        assertEquals(listOf("cookie_tracking"), strategyResolver.lastBaselineTactics)
         assertEquals(2, extractionEngine.loadCalls)
         assertEquals(1, repository.logCalls)
         assertNotNull(repository.lastLoggedPriceCheck)
@@ -162,7 +162,7 @@ class HomeViewModelTest {
         assertEquals("Clear Net", summary.finalConfig)
         assertEquals(0, summary.retryCount)
         assertEquals("success", summary.outcome)
-        assertEquals("https://example.com/p/123", strategyEngine.lastUrl)
+        assertEquals("https://example.com/p/123", strategyResolver.lastUrl)
         assertEquals(
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
@@ -181,7 +181,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -197,7 +197,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shortUrlResolver = { canonicalUrl },
         )
 
@@ -205,7 +205,7 @@ class HomeViewModelTest {
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(canonicalUrl, strategyEngine.lastUrl)
+        assertEquals(canonicalUrl, strategyResolver.lastUrl)
         assertEquals(
             expectedPassUrls(
                 canonicalUrl to TOKEN_SNIFFER_INTEL,
@@ -225,7 +225,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -241,7 +241,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shortUrlResolver = { null },
         )
 
@@ -249,7 +249,7 @@ class HomeViewModelTest {
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(originalShortUrl, strategyEngine.lastUrl)
+        assertEquals(originalShortUrl, strategyResolver.lastUrl)
         assertEquals(
             expectedPassUrls(
                 originalShortUrl to TOKEN_SNIFFER_INTEL,
@@ -269,14 +269,14 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
         )
         val inputUrl = "https://example.com/p/123"
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shadowCleanControlSampler = { false },
         )
 
@@ -302,14 +302,14 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
         )
         val inputUrl = "https://example.com/p/123#details&fp_engine=legacy_token"
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shortUrlResolver = { it },
             shadowCleanControlSampler = { false },
         )
@@ -333,7 +333,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -349,7 +349,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shortUrlResolver = { it },
         )
 
@@ -427,7 +427,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 2299, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -436,7 +436,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shortUrlResolver = { it },
         )
 
@@ -480,7 +480,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 2399, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = "s_legacy",
@@ -493,7 +493,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             isAdminUser = true,
             shortUrlResolver = { it },
         )
@@ -539,7 +539,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -550,7 +550,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -568,7 +568,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = FakeRepository(),
             extractionEngine = FakeExtractionEngine(),
-            strategyEngine = FakeStrategyEngine(
+            strategyResolver = FakeStrategyResolver(
                 result = Result.success(
                     StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
                 ),
@@ -592,7 +592,7 @@ class HomeViewModelTest {
                     Result.success(ExtractionResult(priceCents = 1299, tactics = emptyList())),
                 ),
             ),
-            strategyEngine = FakeStrategyEngine(
+            strategyResolver = FakeStrategyResolver(
                 result = Result.success(
                     StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
                 ),
@@ -620,7 +620,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -631,7 +631,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onDirtyBaselineInputChanged("4495")
@@ -657,7 +657,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -668,7 +668,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -688,7 +688,7 @@ class HomeViewModelTest {
                 Result.failure(IllegalStateException("baseline timeout")),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -699,14 +699,14 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
 
-        assertEquals(0, strategyEngine.determineCalls)
+        assertEquals(0, strategyResolver.resolveCalls)
         assertEquals(2, extractionEngine.loadCalls)
         assertEquals(1, repository.logCalls)
         assertEquals(false, repository.lastLoggedPriceCheck?.extractionSuccessful)
@@ -735,7 +735,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1800, tactics = listOf("challenge_wall"))),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = "s_fallback", wireguardConfig = "wg-test-config"),
             ),
@@ -743,7 +743,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shadowCleanControlSampler = { false },
         )
 
@@ -785,7 +785,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1899, tactics = listOf("challenge_wall"))),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = "s_waf_fallback", wireguardConfig = "wg-test-config"),
             ),
@@ -793,7 +793,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shadowCleanControlSampler = { false },
         )
 
@@ -835,7 +835,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1900, tactics = listOf("cookie_tracking"))),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = "s_shadow", wireguardConfig = "wg-test-config"),
             ),
@@ -843,7 +843,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             shadowCleanControlSampler = { true },
         )
 
@@ -878,7 +878,7 @@ class HomeViewModelTest {
                 Result.failure(IllegalStateException("spoofed failed")),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
@@ -889,7 +889,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -910,7 +910,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -918,7 +918,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -946,7 +946,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1500, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -954,7 +954,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -997,7 +997,7 @@ class HomeViewModelTest {
                 Result.failure(IllegalStateException("WindowEventDispatcher win is null")),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -1005,7 +1005,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -1026,7 +1026,7 @@ class HomeViewModelTest {
                 Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -1034,7 +1034,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -1061,7 +1061,7 @@ class HomeViewModelTest {
                 Result.failure(CleanSessionPreparationException("wipe failed again")),
             ),
         )
-        val strategyEngine = FakeStrategyEngine(
+        val strategyResolver = FakeStrategyResolver(
             result = Result.success(
                 StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
             ),
@@ -1069,7 +1069,7 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(
             repository = repository,
             extractionEngine = extractionEngine,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
         )
 
         viewModel.onUrlInputChanged("https://example.com/p/123")
@@ -1126,7 +1126,7 @@ class HomeViewModelTest {
                     Result.success(ExtractionResult(priceCents = 2000, tactics = emptyList())),
                 ),
             ),
-            strategyEngine = FakeStrategyEngine(
+            strategyResolver = FakeStrategyResolver(
                 result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
             ),
         )
@@ -1160,7 +1160,7 @@ class HomeViewModelTest {
                     Result.success(ExtractionResult(priceCents = 2500, tactics = listOf("cookie_tracking"))),
                 ),
             ),
-            strategyEngine = FakeStrategyEngine(
+            strategyResolver = FakeStrategyResolver(
                 result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
             ),
         )
@@ -1174,18 +1174,18 @@ class HomeViewModelTest {
         assertTrue(processState.summary.diagnostics.any { it.contains("Retailer intel write skipped") })
     }
 
-    private class FakeStrategyEngine(
+    private class FakeStrategyResolver(
         var result: Result<StrategyResult>,
-    ) : PricingStrategyEngine {
-        var determineCalls: Int = 0
+    ) : StrategyResolver {
+        var resolveCalls: Int = 0
         var lastBaselineTactics: List<String> = emptyList()
         var lastUrl: String? = null
 
-        override suspend fun determineStrategy(
+        override suspend fun resolveStrategy(
             url: String,
             baselineTactics: List<String>,
         ): Result<StrategyResult> {
-            determineCalls += 1
+            resolveCalls += 1
             lastUrl = url
             lastBaselineTactics = baselineTactics
             return result

@@ -11,7 +11,7 @@ import com.fairprice.app.coordinator.model.CoordinatorProcessState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.engine.ExtractionEngine
-import com.fairprice.app.engine.PricingStrategyEngine
+import com.fairprice.app.engine.StrategyResolver
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -72,7 +72,7 @@ data class HomeUiState(
 class HomeViewModel(
     private val repository: FairPriceRepository,
     private val extractionEngine: ExtractionEngine,
-    private val strategyEngine: PricingStrategyEngine,
+    private val strategyResolver: StrategyResolver,
     private val isAdminUser: Boolean = false,
     private val shortUrlResolver: suspend (String) -> String? = { inputUrl ->
         resolveAmazonShortUrlBestEffort(inputUrl)
@@ -116,7 +116,7 @@ class HomeViewModel(
         DefaultPriceCheckCoordinator(
             scope = viewModelScope,
             repository = repository,
-            strategyEngine = strategyEngine,
+            strategyResolver = strategyResolver,
             telemetryAssembler = telemetryAssembler,
             preSpoofStageRunner = PreSpoofStageRunner(
                 extractionEngine = extractionEngine,

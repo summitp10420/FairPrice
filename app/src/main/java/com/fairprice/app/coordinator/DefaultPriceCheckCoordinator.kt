@@ -6,7 +6,7 @@ import com.fairprice.app.coordinator.model.CoordinatorState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.engine.EngineProfile
-import com.fairprice.app.engine.PricingStrategyEngine
+import com.fairprice.app.engine.StrategyResolver
 import com.fairprice.app.engine.StrategyResult
 import java.net.URI
 import java.util.Locale
@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 class DefaultPriceCheckCoordinator(
     private val scope: CoroutineScope,
     private val repository: FairPriceRepository,
-    private val strategyEngine: PricingStrategyEngine,
+    private val strategyResolver: StrategyResolver,
     private val telemetryAssembler: TelemetryAssembler,
     private val preSpoofStageRunner: PreSpoofStageRunner,
     private val spoofAttemptRunner: SpoofAttemptRunner,
@@ -104,7 +104,7 @@ class DefaultPriceCheckCoordinator(
                     is PreSpoofStageRunner.Result.Success -> {
                         emitProcessing("Determining strategy...")
                         val strategy =
-                            strategyEngine.determineStrategy(
+                            strategyResolver.resolveStrategy(
                                 url = submittedUrl,
                                 baselineTactics = preSpoof.tacticSourceExtraction.tactics,
                             ).getOrElse { throwable ->

@@ -16,7 +16,7 @@ import androidx.navigation.compose.rememberNavController
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.FairPriceRepositoryImpl
 import com.fairprice.app.data.SupabaseClientProvider
-import com.fairprice.app.engine.DefaultPricingStrategyEngine
+import com.fairprice.app.engine.LocalStrategyFallback
 import com.fairprice.app.engine.GeckoExtractionEngine
 import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
@@ -36,8 +36,8 @@ class MainActivity : ComponentActivity() {
     }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
     private val installationId: String by lazy { getOrCreateInstallationId() }
-    private val strategyEngine by lazy {
-        DefaultPricingStrategyEngine(
+    private val strategyResolver by lazy {
+        LocalStrategyFallback(
             installationIdProvider = { installationId },
         )
     }
@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
                     return HomeViewModel(
                         repository = repository,
                         extractionEngine = extractionEngine,
-                        strategyEngine = strategyEngine,
+                        strategyResolver = strategyResolver,
                         isAdminUser = BuildConfig.DEBUG,
                         shadowCleanControlSampler = { inputUrl ->
                             val normalized = inputUrl.trim().lowercase(Locale.US)
