@@ -21,8 +21,6 @@ class TelemetryAssembler {
         internal const val CLEAR_NET_DISPLAY = "Clear Net"
         private const val ENGINE_VERSION = "11.5a"
         private const val ENGINE_BUILD_ID = "local-dev"
-        private const val CONTROL_PROFILE_TOKEN = "clean_control_v1"
-        private const val YALE_SMART_PROFILE_TOKEN = "yale_smart"
     }
 
     fun buildPriceCheck(
@@ -222,12 +220,5 @@ class TelemetryAssembler {
 
     private fun displayConfigLabel(configId: String): String {
         return if (configId == CLEAR_NET) CLEAR_NET_DISPLAY else configId.removeSuffix(".conf").trim()
-    }
-
-    private fun EngineProfile.toTelemetryValue(): String {
-        return when (this) {
-            EngineProfile.LEGACY -> CONTROL_PROFILE_TOKEN
-            EngineProfile.YALE_SMART -> YALE_SMART_PROFILE_TOKEN
-        }
     }
 }

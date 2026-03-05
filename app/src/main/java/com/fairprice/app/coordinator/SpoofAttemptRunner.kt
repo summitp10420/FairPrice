@@ -52,8 +52,9 @@ class SpoofAttemptRunner(
             val attemptNumber = attempt + 1
             onProcessing("Extracting spoofed price ($attemptNumber/$SPOOF_ATTEMPT_MAX)...")
             Log.i(TAG, "Spoof execution URL (sanitized=$spoofUrlSanitized): $spoofExecutionUrl")
+            var extractionResult: kotlin.Result<ExtractionResult>? = null
             val latencyMs = measureTimeMillis {
-                val extractionResult = extractionEngine.loadAndExtract(
+                extractionResult = extractionEngine.loadAndExtract(
                     navigationUrl,
                     request = ExtractionRequest(
                         cleanSessionRequired = true,
@@ -61,81 +62,82 @@ class SpoofAttemptRunner(
                         strictTrackingProtection = strictTrackingProtection,
                     ),
                 )
-                when {
-                    extractionResult.isSuccess -> {
-                        val extracted = extractionResult.getOrThrow()
-                        if (extracted.isWafBlockDetected()) {
-                            val wafThrowable = IllegalStateException("waf_block detected during Spoof Pass")
-                            mutableAttemptRows += telemetryAssembler.buildAttemptRow(
-                                phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
-                                attemptIndex = attemptNumber,
-                                vpnConfig = TelemetryAssembler.CLEAR_NET,
-                                success = false,
-                                throwable = wafThrowable,
-                                extracted = extracted,
-                                latencyMs = 0L,
-                                executionUrl = spoofExecutionUrl,
-                                appliedLevers = telemetryAssembler.buildAppliedLevers(
-                                    urlSanitized = spoofUrlSanitized,
-                                    amnesiaProtocol = true,
-                                    trackingProtection = trackingProtectionForProfile(engineProfile),
-                                    strategy = strategy,
-                                    engineProfile = engineProfile,
-                                    engineSelectionSource = engineSelectionSource,
-                                ),
-                            )
-                            mutableDiagnostics += "Spoof attempt blocked by WAF."
-                        } else {
-                            mutableAttemptRows += telemetryAssembler.buildAttemptRow(
-                                phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
-                                attemptIndex = attemptNumber,
-                                vpnConfig = TelemetryAssembler.CLEAR_NET,
-                                success = true,
-                                throwable = null,
-                                extracted = extracted,
-                                latencyMs = 0L,
-                                executionUrl = spoofExecutionUrl,
-                                appliedLevers = telemetryAssembler.buildAppliedLevers(
-                                    urlSanitized = spoofUrlSanitized,
-                                    amnesiaProtocol = true,
-                                    trackingProtection = trackingProtectionForProfile(engineProfile),
-                                    strategy = strategy,
-                                    engineProfile = engineProfile,
-                                    engineSelectionSource = engineSelectionSource,
-                                ),
-                            )
-                            spoofedResult = extracted
-                        }
-                    }
-                    else -> {
-                        val throwable = extractionResult.exceptionOrNull()
-                        val userMessage = when {
-                            isCleanSessionPreparationFailure(throwable) ->
-                                "Spoof attempt blocked: unable to prepare a clean session."
-                            else -> "Spoof attempt failed: ${throwableToMessage(throwable)}"
-                        }
+            }
+            val result = extractionResult!!
+            when {
+                result.isSuccess -> {
+                    val extracted = result.getOrThrow()
+                    if (extracted.isWafBlockDetected()) {
+                        val wafThrowable = IllegalStateException("waf_block detected during Spoof Pass")
                         mutableAttemptRows += telemetryAssembler.buildAttemptRow(
                             phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
                             attemptIndex = attemptNumber,
                             vpnConfig = TelemetryAssembler.CLEAR_NET,
                             success = false,
-                            throwable = throwable,
-                            extracted = null,
-                            latencyMs = 0L,
+                            throwable = wafThrowable,
+                            extracted = extracted,
+                            latencyMs = latencyMs,
                             executionUrl = spoofExecutionUrl,
                             appliedLevers = telemetryAssembler.buildAppliedLevers(
                                 urlSanitized = spoofUrlSanitized,
-                                amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
+                                amnesiaProtocol = true,
                                 trackingProtection = trackingProtectionForProfile(engineProfile),
                                 strategy = strategy,
                                 engineProfile = engineProfile,
                                 engineSelectionSource = engineSelectionSource,
                             ),
                         )
-                        mutableDiagnostics += userMessage
-                        if (throwable != null) {
-                            Log.e(TAG, "Spoof attempt failed (attempt=$attemptNumber)", throwable)
-                        }
+                        mutableDiagnostics += "Spoof attempt blocked by WAF."
+                    } else {
+                        mutableAttemptRows += telemetryAssembler.buildAttemptRow(
+                            phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
+                            attemptIndex = attemptNumber,
+                            vpnConfig = TelemetryAssembler.CLEAR_NET,
+                            success = true,
+                            throwable = null,
+                            extracted = extracted,
+                            latencyMs = latencyMs,
+                            executionUrl = spoofExecutionUrl,
+                            appliedLevers = telemetryAssembler.buildAppliedLevers(
+                                urlSanitized = spoofUrlSanitized,
+                                amnesiaProtocol = true,
+                                trackingProtection = trackingProtectionForProfile(engineProfile),
+                                strategy = strategy,
+                                engineProfile = engineProfile,
+                                engineSelectionSource = engineSelectionSource,
+                            ),
+                        )
+                        spoofedResult = extracted
+                    }
+                }
+                else -> {
+                    val throwable = result.exceptionOrNull()
+                    val userMessage = when {
+                        isCleanSessionPreparationFailure(throwable) ->
+                            "Spoof attempt blocked: unable to prepare a clean session."
+                        else -> "Spoof attempt failed: ${throwableToMessage(throwable)}"
+                    }
+                    mutableAttemptRows += telemetryAssembler.buildAttemptRow(
+                        phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
+                        attemptIndex = attemptNumber,
+                        vpnConfig = TelemetryAssembler.CLEAR_NET,
+                        success = false,
+                        throwable = throwable,
+                        extracted = null,
+                        latencyMs = latencyMs,
+                        executionUrl = spoofExecutionUrl,
+                        appliedLevers = telemetryAssembler.buildAppliedLevers(
+                            urlSanitized = spoofUrlSanitized,
+                            amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
+                            trackingProtection = trackingProtectionForProfile(engineProfile),
+                            strategy = strategy,
+                            engineProfile = engineProfile,
+                            engineSelectionSource = engineSelectionSource,
+                        ),
+                    )
+                    mutableDiagnostics += userMessage
+                    if (throwable != null) {
+                        Log.e(TAG, "Spoof attempt failed (attempt=$attemptNumber)", throwable)
                     }
                 }
             }
@@ -165,38 +167,7 @@ class SpoofAttemptRunner(
             throwable?.cause is CleanSessionPreparationException
     }
 
-    private fun ExtractionResult.isWafBlockDetected(): Boolean {
-        if (debugExtractionPath.equals("waf_block", ignoreCase = true)) return true
-        return tactics.any { it.startsWith("block_", ignoreCase = true) }
-    }
-
     private fun buildEngineBootstrapNavigationUrl(executionUrl: String, profile: EngineProfile): String {
         return appendEngineBootstrapToken(executionUrl, profile.toTelemetryValue())
-    }
-
-    private fun appendEngineBootstrapToken(executionUrl: String, tokenValue: String): String {
-        val engineHashKey = "fp_engine"
-        val hashIndex = executionUrl.indexOf('#')
-        if (hashIndex < 0) {
-            return "$executionUrl#$engineHashKey=$tokenValue"
-        }
-        val base = executionUrl.substring(0, hashIndex)
-        val existingHash = executionUrl.substring(hashIndex + 1)
-        val hashParts = existingHash
-            .split("&")
-            .filter { it.isNotBlank() }
-            .filterNot { part ->
-                part.substringBefore('=').trim().equals(engineHashKey, ignoreCase = true)
-            }
-            .toMutableList()
-        hashParts += "$engineHashKey=$tokenValue"
-        return "$base#${hashParts.joinToString("&")}"
-    }
-
-    private fun EngineProfile.toTelemetryValue(): String {
-        return when (this) {
-            EngineProfile.LEGACY -> "clean_control_v1"
-            EngineProfile.YALE_SMART -> "yale_smart"
-        }
     }
 }
