@@ -4,6 +4,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
+/**
+ * Telemetry row for a single extraction attempt. Maps to Supabase price_check_attempts table.
+ * Note: vpn_config, vpn_config_source, vpn_config_provider are legacy names; on clear-net
+ * they hold "clear_net".
+ */
 @Serializable
 data class PriceCheckAttempt(
     val id: String? = null,

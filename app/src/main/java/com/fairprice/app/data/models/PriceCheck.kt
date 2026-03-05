@@ -4,6 +4,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
+/**
+ * Telemetry payload for a price check run. Maps to Supabase price_checks table.
+ * Note: attempted_configs, final_config, final_config_source, final_config_provider are legacy
+ * names from VPN mode; on clear-net they hold "clear_net" or empty.
+ */
 @Serializable
 data class PriceCheck(
     val id: String? = null,
