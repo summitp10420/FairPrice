@@ -62,11 +62,11 @@ Part A must be complete before Part B. Part A can be done with no network calls;
 
 ### A3. Make StrategyResult Serializable (Prep for Railway)
 
-**Goal:** `StrategyResult` must parse JSON from Railway. Add `@Serializable`, `proxyConfig`, and ensure `EngineProfile` is serializable.
+**Goal:** `StrategyResult` must parse JSON from Railway. Add `@Serializable`, `proxyConfig`, and strategy profile (open string from backend).
 
 | Task | Details |
 |------|---------|
-| Add `@Serializable` to `StrategyResult` and `EngineProfile` | kotlinx.serialization |
+| Add `@Serializable` to `StrategyResult`; strategy profile as string | kotlinx.serialization; backend returns strategy_profile (string) |
 | Add `proxyConfig: JsonObject? = null` | Reserved for Sprint 14 residential proxies |
 | Add Ktor ContentNegotiation deps | `ktor-client-content-negotiation`, `ktor-serialization-kotlinx-json` |
 | Verify `wireguardConfig` compatibility | Keep for schema compatibility; leave empty |

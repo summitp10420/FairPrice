@@ -40,12 +40,12 @@ Actions:
 Policy knobs:
 - Endpoint URL.
 - Timeout duration.
-- Fallback strategy (e.g., conservative LEGACY or YALE_SMART).
+- Fallback strategy (e.g., conservative clean_control_v1 or yale_smart).
 
 Key telemetry:
 - Railway call success/failure.
 - Strategy source (railway vs fallback).
-- engineSelectionPolicy, engineProfile from StrategyResult.
+- engineSelectionPolicy, strategy_profile from StrategyResult.
 
 3.1 VPN Config Pool Management Lever [DEPRECATED for clear-net phase]
 What it controls:

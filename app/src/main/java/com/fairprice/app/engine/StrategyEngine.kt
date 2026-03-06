@@ -2,6 +2,7 @@ package com.fairprice.app.engine
 
 import java.net.URI
 import java.util.Locale
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -15,19 +16,14 @@ interface StrategyResolver {
 }
 
 @Serializable
-enum class EngineProfile {
-    LEGACY,
-    YALE_SMART,
-}
-
-@Serializable
 data class StrategyResult(
     val strategyId: String? = null,
     val strategyName: String = "clean_strategy_v1.0",
     val strategyEngineName: String = "strategy_engine_v1.0",
     val strategyVersion: String = "1.0",
     val wireguardConfig: String = "",
-    val engineProfile: EngineProfile = EngineProfile.YALE_SMART,
+    @SerialName("strategy_profile")
+    val strategyProfile: String = "yale_smart",
     val engineSelectionPolicy: String? = null,
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
@@ -59,12 +55,12 @@ class LocalStrategyFallback(
         val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
         val assignmentKey = "$domain|$installationId"
         val bucket = bucketCalculator(assignmentKey).coerceIn(0, BUCKET_MODULUS - 1)
-        val profile = if (bucket < YALE_SMART_PERCENT) EngineProfile.YALE_SMART else EngineProfile.LEGACY
+        val strategyProfile = if (bucket < YALE_SMART_PERCENT) "yale_smart" else "clean_control_v1"
         return Result.success(
             StrategyResult(
                 strategyId = null,
                 wireguardConfig = "",
-                engineProfile = profile,
+                strategyProfile = strategyProfile,
                 engineSelectionPolicy = ENGINE_SELECTION_POLICY,
                 engineSelectionReason = "bucket=$bucket domain=$domain",
                 engineSelectionKeyScope = ENGINE_SELECTION_SCOPE,

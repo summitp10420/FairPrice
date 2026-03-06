@@ -10,20 +10,24 @@ interface StrategyRequest {
   anonymous_bucket: number; // 0-99
 }
 
-/** Outbound payload - maps 1:1 with Android StrategyResult */
+/** Outbound payload - maps 1:1 with Android StrategyResult (snake_case keys for JSON) */
 interface StrategyResponse {
   strategyId: string | null;
   strategyName: string;
   strategyEngineName: string;
   strategyVersion: string;
   wireguardConfig: string;
-  engineProfile: 'LEGACY' | 'YALE_SMART';
+  strategy_profile: string;
   engineSelectionPolicy: string;
   engineSelectionReason: string;
   engineSelectionKeyScope: string;
   engineSelectionBucket: number;
   proxyConfig: null;
 }
+
+/** Profile codes the engine can return. Add new codes here (or in DB later) and the app will use behavior mapping / default. */
+const STRATEGY_PROFILE_CODES = ['yale_smart', 'clean_control_v1'] as const;
+type StrategyProfileCode = (typeof STRATEGY_PROFILE_CODES)[number];
 
 const STRICT_WAF_TACTICS = [
   'vendor_datadome',
@@ -44,25 +48,25 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
 
   const requiresStrictAmnesia = STRICT_WAF_TACTICS.some((t) => detected_tactics.includes(t));
 
-  let profile: 'LEGACY' | 'YALE_SMART' = 'LEGACY';
+  let strategyProfile: StrategyProfileCode = 'clean_control_v1';
   let policy = 'railway_dynamic_v1_50_50';
   let reason = `bucket=${anonymous_bucket} domain=${domain}`;
 
   if (requiresStrictAmnesia) {
-    profile = 'YALE_SMART';
+    strategyProfile = 'yale_smart';
     policy = 'railway_dynamic_v1_waf_override';
     reason += ' waf_override=true';
   } else if (anonymous_bucket < 50) {
-    profile = 'YALE_SMART';
+    strategyProfile = 'yale_smart';
   }
 
   const response: StrategyResponse = {
     strategyId: 'strat_railway_alpha',
-    strategyName: 'railway_brain_v1.0',
-    strategyEngineName: 'railway_remote_engine',
+    strategyName: policy,
+    strategyEngineName: 'railway_brain_v1.0',
     strategyVersion: '1.0',
     wireguardConfig: '',
-    engineProfile: profile,
+    strategy_profile: strategyProfile,
     engineSelectionPolicy: policy,
     engineSelectionReason: reason,
     engineSelectionKeyScope: 'domain+anonymous_bucket',

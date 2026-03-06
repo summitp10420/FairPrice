@@ -1,6 +1,5 @@
 package com.fairprice.app.coordinator
 
-import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.ExtractionResult
 
 private const val ENGINE_HASH_KEY = "fp_engine"
@@ -32,14 +31,4 @@ fun appendEngineBootstrapToken(executionUrl: String, tokenValue: String): String
 fun ExtractionResult.isWafBlockDetected(): Boolean {
     if (debugExtractionPath.equals("waf_block", ignoreCase = true)) return true
     return tactics.any { it.startsWith("block_", ignoreCase = true) }
-}
-
-/**
- * Telemetry token for engine profile (clean_control_v1 or yale_smart).
- */
-fun EngineProfile.toTelemetryValue(): String {
-    return when (this) {
-        EngineProfile.LEGACY -> "clean_control_v1"
-        EngineProfile.YALE_SMART -> "yale_smart"
-    }
 }

@@ -1,6 +1,7 @@
 package com.fairprice.app
 
 import android.content.Intent
+import android.util.Log
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,8 +17,11 @@ import androidx.navigation.compose.rememberNavController
 import com.fairprice.app.data.FairPriceRepository
 import com.fairprice.app.data.FairPriceRepositoryImpl
 import com.fairprice.app.data.SupabaseClientProvider
-import com.fairprice.app.engine.LocalStrategyFallback
 import com.fairprice.app.engine.GeckoExtractionEngine
+import com.fairprice.app.engine.LocalStrategyFallback
+import com.fairprice.app.engine.RailwayStrategyClient
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
 import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
@@ -26,6 +30,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     companion object {
+        private const val TAG = "MainActivity"
         private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
         private const val INSTALLATION_PREFS = "fairprice_engine_assignment"
         private const val INSTALLATION_ID_KEY = "installation_id"
@@ -36,10 +41,23 @@ class MainActivity : ComponentActivity() {
     }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
     private val installationId: String by lazy { getOrCreateInstallationId() }
+    private val httpClient by lazy { HttpClient(OkHttp) }
     private val strategyResolver by lazy {
-        LocalStrategyFallback(
-            installationIdProvider = { installationId },
-        )
+        val localFallback = LocalStrategyFallback(installationIdProvider = { installationId })
+        val endpoint = BuildConfig.RAILWAY_STRATEGY_ENDPOINT
+        Log.i(TAG, "Strategy resolver init: RAILWAY_STRATEGY_ENDPOINT=${if (endpoint.isNotBlank()) endpoint else "(empty)"}")
+        if (endpoint.isNotBlank()) {
+            Log.i(TAG, "Using RailwayStrategyClient")
+            RailwayStrategyClient(
+                httpClient = httpClient,
+                railwayEndpoint = endpoint,
+                localFallback = localFallback,
+                installationIdProvider = { installationId },
+            )
+        } else {
+            Log.i(TAG, "Using LocalStrategyFallback (no Railway endpoint)")
+            localFallback
+        }
     }
 
     private val homeViewModel: HomeViewModel by viewModels {
@@ -66,6 +84,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.e(TAG, "FairPrice onCreate START")  // Early log to confirm Logcat sees this app
         enableEdgeToEdge()
 
         handleSendIntent(intent)

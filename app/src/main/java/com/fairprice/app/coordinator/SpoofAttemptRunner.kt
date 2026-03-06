@@ -3,10 +3,10 @@ package com.fairprice.app.coordinator
 import android.util.Log
 import com.fairprice.app.data.models.PriceCheckAttempt
 import com.fairprice.app.engine.CleanSessionPreparationException
-import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
+import com.fairprice.app.engine.StrategyProfileBehavior
 import com.fairprice.app.engine.StrategyResult
 import kotlin.system.measureTimeMillis
 
@@ -32,7 +32,7 @@ class SpoofAttemptRunner(
 
     suspend fun execute(
         strategy: StrategyResult,
-        engineProfile: EngineProfile,
+        strategyProfile: String,
         engineSelectionSource: String,
         spoofExecutionUrl: String,
         spoofUrlSanitized: Boolean,
@@ -45,8 +45,8 @@ class SpoofAttemptRunner(
         val mutableDiagnostics = diagnostics.toMutableList()
         var spoofedResult: ExtractionResult? = null
         var terminalError: String? = null
-        val strictTrackingProtection = engineProfile == EngineProfile.YALE_SMART
-        val navigationUrl = buildEngineBootstrapNavigationUrl(spoofExecutionUrl, engineProfile)
+        val strictTrackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile) == "strict"
+        val navigationUrl = buildEngineBootstrapNavigationUrl(spoofExecutionUrl, strategyProfile)
 
         for (attempt in 0 until SPOOF_ATTEMPT_MAX) {
             val attemptNumber = attempt + 1
@@ -81,9 +81,9 @@ class SpoofAttemptRunner(
                             appliedLevers = telemetryAssembler.buildAppliedLevers(
                                 urlSanitized = spoofUrlSanitized,
                                 amnesiaProtocol = true,
-                                trackingProtection = trackingProtectionForProfile(engineProfile),
+                                trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
                                 strategy = strategy,
-                                engineProfile = engineProfile,
+                                strategyProfile = strategyProfile,
                                 engineSelectionSource = engineSelectionSource,
                             ),
                         )
@@ -101,9 +101,9 @@ class SpoofAttemptRunner(
                             appliedLevers = telemetryAssembler.buildAppliedLevers(
                                 urlSanitized = spoofUrlSanitized,
                                 amnesiaProtocol = true,
-                                trackingProtection = trackingProtectionForProfile(engineProfile),
+                                trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
                                 strategy = strategy,
-                                engineProfile = engineProfile,
+                                strategyProfile = strategyProfile,
                                 engineSelectionSource = engineSelectionSource,
                             ),
                         )
@@ -129,9 +129,9 @@ class SpoofAttemptRunner(
                         appliedLevers = telemetryAssembler.buildAppliedLevers(
                             urlSanitized = spoofUrlSanitized,
                             amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
-                            trackingProtection = trackingProtectionForProfile(engineProfile),
+                            trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
                             strategy = strategy,
-                            engineProfile = engineProfile,
+                            strategyProfile = strategyProfile,
                             engineSelectionSource = engineSelectionSource,
                         ),
                     )
@@ -158,16 +158,12 @@ class SpoofAttemptRunner(
         )
     }
 
-    private fun trackingProtectionForProfile(profile: EngineProfile): String {
-        return if (profile == EngineProfile.YALE_SMART) "strict" else "off"
-    }
-
     private fun isCleanSessionPreparationFailure(throwable: Throwable?): Boolean {
         return throwable is CleanSessionPreparationException ||
             throwable?.cause is CleanSessionPreparationException
     }
 
-    private fun buildEngineBootstrapNavigationUrl(executionUrl: String, profile: EngineProfile): String {
-        return appendEngineBootstrapToken(executionUrl, profile.toTelemetryValue())
+    private fun buildEngineBootstrapNavigationUrl(executionUrl: String, profileCode: String): String {
+        return appendEngineBootstrapToken(executionUrl, StrategyProfileBehavior.bootstrapTokenValue(profileCode))
     }
 }

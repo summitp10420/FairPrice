@@ -5,7 +5,7 @@ import com.fairprice.app.coordinator.model.CoordinatorProcessState
 import com.fairprice.app.coordinator.model.CoordinatorState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
 import com.fairprice.app.data.FairPriceRepository
-import com.fairprice.app.engine.EngineProfile
+import com.fairprice.app.engine.StrategyProfileBehavior
 import com.fairprice.app.engine.StrategyResolver
 import com.fairprice.app.engine.StrategyResult
 import java.net.URI
@@ -143,20 +143,21 @@ class DefaultPriceCheckCoordinator(
                                 return@launch
                             }
 
-                        val profileResolution = resolveActiveEngineProfile(
-                            strategyProfile = strategy.engineProfile,
+                        val profileResolution = resolveActiveStrategyProfile(
+                            strategyProfile = strategy.strategyProfile,
                             forceLegacy = params.adminOverrideForceLegacy,
                             forceYaleSmart = params.adminOverrideForceYaleSmart,
                             isAdmin = params.isAdmin,
                         )
-                        val spoofUrlPlan = when (profileResolution.profile) {
-                            EngineProfile.LEGACY -> SanitizedUrl(url = submittedUrl, wasSanitized = false)
-                            EngineProfile.YALE_SMART -> sanitizeUrlForSpoof(submittedUrl)
+                        val spoofUrlPlan = if (StrategyProfileBehavior.requiresUrlSanitize(profileResolution.profile)) {
+                            sanitizeUrlForSpoof(submittedUrl)
+                        } else {
+                            SanitizedUrl(url = submittedUrl, wasSanitized = false)
                         }
 
                         val spoofResult = spoofAttemptRunner.execute(
                             strategy = strategy,
-                            engineProfile = profileResolution.profile,
+                            strategyProfile = profileResolution.profile,
                             engineSelectionSource = profileResolution.selectionSource,
                             spoofExecutionUrl = spoofUrlPlan.url,
                             spoofUrlSanitized = spoofUrlPlan.wasSanitized,
@@ -368,19 +369,19 @@ class DefaultPriceCheckCoordinator(
         return SanitizedUrl(url = sanitizedUrl, wasSanitized = sanitizedUrl != inputUrl)
     }
 
-    private fun resolveActiveEngineProfile(
-        strategyProfile: EngineProfile,
+    private fun resolveActiveStrategyProfile(
+        strategyProfile: String,
         forceLegacy: Boolean,
         forceYaleSmart: Boolean,
         isAdmin: Boolean,
-    ): ActiveEngineProfile {
+    ): ActiveStrategyProfile {
         if (!isAdmin || (!forceLegacy && !forceYaleSmart)) {
-            return ActiveEngineProfile(profile = strategyProfile, selectionSource = "strategy")
+            return ActiveStrategyProfile(profile = strategyProfile, selectionSource = "strategy")
         }
         return when {
-            forceLegacy -> ActiveEngineProfile(EngineProfile.LEGACY, "admin_override")
-            forceYaleSmart -> ActiveEngineProfile(EngineProfile.YALE_SMART, "admin_override")
-            else -> ActiveEngineProfile(strategyProfile, "strategy")
+            forceLegacy -> ActiveStrategyProfile(StrategyProfileBehavior.CLEAN_CONTROL_V1, "admin_override")
+            forceYaleSmart -> ActiveStrategyProfile(StrategyProfileBehavior.YALE_SMART, "admin_override")
+            else -> ActiveStrategyProfile(strategyProfile, "strategy")
         }
     }
 
@@ -393,8 +394,8 @@ class DefaultPriceCheckCoordinator(
         return throwable.message ?: throwable::class.java.simpleName
     }
 
-    private data class ActiveEngineProfile(
-        val profile: EngineProfile,
+    private data class ActiveStrategyProfile(
+        val profile: String,
         val selectionSource: String,
     )
 

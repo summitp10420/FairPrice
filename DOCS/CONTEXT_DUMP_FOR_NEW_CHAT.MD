@@ -36,7 +36,7 @@
 ### Telemetry & Utils
 
 - **TelemetryAssembler** – Builds `PriceCheck`, `PriceCheckAttempt`, `SummaryData`. Uses `CLEAR_NET` / `CLEAR_NET_DISPLAY` for config-related values.
-- **EngineBootstrapUtils** – Shared: `appendEngineBootstrapToken`, `ExtractionResult.isWafBlockDetected()`, `EngineProfile.toTelemetryValue()`.
+- **EngineBootstrapUtils** – Shared: `appendEngineBootstrapToken`, `ExtractionResult.isWafBlockDetected()`. Strategy profile is an open string from the backend; behavior mapping in `StrategyProfileBehavior`.
 
 ### Data Flow Summary
 
@@ -44,7 +44,7 @@
 URL share/paste → HomeViewModel.startPriceCheck
   → DefaultPriceCheckCoordinator.startPriceCheck
     → PreSpoofStageRunner (sniffer → optional clean-control fallback/shadow)
-    → PricingStrategyEngine.determineStrategy
+    → StrategyResolver.resolveStrategy
     → SpoofAttemptRunner (clear-net loadAndExtract up to 2 attempts)
     → FairPriceRepository.logPriceCheckRun
   → state update → HomeScreen

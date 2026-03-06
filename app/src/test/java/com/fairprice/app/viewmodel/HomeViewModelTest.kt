@@ -8,7 +8,6 @@ import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.CleanSessionPreparationException
-import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.StrategyResolver
 import com.fairprice.app.engine.StrategyResult
 import kotlinx.coroutines.Dispatchers
@@ -386,7 +385,7 @@ class HomeViewModelTest {
         )
         assertEquals(
             "yale_smart",
-            attempts[1].appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
             "11.5a",
@@ -467,7 +466,7 @@ class HomeViewModelTest {
         )
         assertEquals(
             "yale_smart",
-            attempts[1].appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+            attempts[1].appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
     }
 
@@ -485,7 +484,7 @@ class HomeViewModelTest {
                 StrategyResult(
                     strategyId = "s_legacy",
                     wireguardConfig = "wg-test-config",
-                    engineProfile = EngineProfile.YALE_SMART,
+                    strategyProfile = "yale_smart",
                 ),
             ),
         )
@@ -522,7 +521,7 @@ class HomeViewModelTest {
         )
         assertEquals(
             "clean_control_v1",
-            spoofAttempt.appliedLevers?.jsonObject?.get("engine_profile")?.jsonPrimitive?.content,
+            spoofAttempt.appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
             "admin_override",

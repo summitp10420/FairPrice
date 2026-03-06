@@ -3,7 +3,6 @@ package com.fairprice.app.coordinator
 import com.fairprice.app.data.RunLogResult
 import com.fairprice.app.data.models.PriceCheck
 import com.fairprice.app.data.models.PriceCheckAttempt
-import com.fairprice.app.engine.EngineProfile
 import com.fairprice.app.engine.ExtractionResult
 import com.fairprice.app.engine.StrategyResult
 import com.fairprice.app.viewmodel.SummaryData
@@ -111,7 +110,7 @@ class TelemetryAssembler {
         amnesiaProtocol: Boolean? = null,
         trackingProtection: String? = null,
         strategy: StrategyResult? = null,
-        engineProfile: EngineProfile? = null,
+        strategyProfile: String? = null,
         engineSelectionSource: String? = null,
     ): JsonObject {
         return buildJsonObject {
@@ -127,8 +126,8 @@ class TelemetryAssembler {
                 strategy.engineSelectionKeyScope?.let { put("strategy_profile_key_scope", JsonPrimitive(it)) }
                 strategy.engineSelectionBucket?.let { put("strategy_profile_bucket", JsonPrimitive(it)) }
             }
-            if (engineProfile != null) {
-                put("engine_profile", JsonPrimitive(engineProfile.toTelemetryValue()))
+            if (strategyProfile != null) {
+                put("strategy_profile", JsonPrimitive(strategyProfile))
                 put("engine_version", JsonPrimitive(ENGINE_VERSION))
                 put("engine_build_id", JsonPrimitive(ENGINE_BUILD_ID))
             }
