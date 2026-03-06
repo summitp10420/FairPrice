@@ -71,7 +71,7 @@ URL share/paste → HomeViewModel.startPriceCheck
 - **Phases:** `sniffer`, `clean_control`, `spoof`
 - **Clean control modes:** `none`, `fallback`, `shadow`
 - **Network:** `clear_net` (telemetry), `"Clear Net"` (display)
-- **URL tokens:** sniffer=`sniffer_intel`, clean-control=`clean_control_intel`, spoof=`yale_smart` or `clean_control_v1`
+- **URL tokens:** sniffer=`sniffer_intel`, clean-control=`clean_control_intel`, spoof=`yale_smart` or `legacy`
 
 ---
 

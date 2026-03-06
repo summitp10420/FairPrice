@@ -143,22 +143,21 @@ class DefaultPriceCheckCoordinator(
                                 return@launch
                             }
 
-                        val profileResolution = resolveActiveStrategyProfile(
-                            strategyProfile = strategy.strategyProfile,
+                        val (activeStrategy, selectionSource) = resolveActiveStrategy(
+                            strategy = strategy,
                             forceLegacy = params.adminOverrideForceLegacy,
                             forceYaleSmart = params.adminOverrideForceYaleSmart,
                             isAdmin = params.isAdmin,
                         )
-                        val spoofUrlPlan = if (StrategyProfileBehavior.requiresUrlSanitize(profileResolution.profile)) {
+                        val spoofUrlPlan = if (activeStrategy.urlSanitize) {
                             sanitizeUrlForSpoof(submittedUrl)
                         } else {
                             SanitizedUrl(url = submittedUrl, wasSanitized = false)
                         }
 
                         val spoofResult = spoofAttemptRunner.execute(
-                            strategy = strategy,
-                            strategyProfile = profileResolution.profile,
-                            engineSelectionSource = profileResolution.selectionSource,
+                            strategy = activeStrategy,
+                            engineSelectionSource = selectionSource,
                             spoofExecutionUrl = spoofUrlPlan.url,
                             spoofUrlSanitized = spoofUrlPlan.wasSanitized,
                             attemptRows = preSpoof.attemptRows,
@@ -369,19 +368,33 @@ class DefaultPriceCheckCoordinator(
         return SanitizedUrl(url = sanitizedUrl, wasSanitized = sanitizedUrl != inputUrl)
     }
 
-    private fun resolveActiveStrategyProfile(
-        strategyProfile: String,
+    private fun resolveActiveStrategy(
+        strategy: StrategyResult,
         forceLegacy: Boolean,
         forceYaleSmart: Boolean,
         isAdmin: Boolean,
-    ): ActiveStrategyProfile {
+    ): Pair<StrategyResult, String> {
         if (!isAdmin || (!forceLegacy && !forceYaleSmart)) {
-            return ActiveStrategyProfile(profile = strategyProfile, selectionSource = "strategy")
+            return strategy to "strategy"
         }
         return when {
-            forceLegacy -> ActiveStrategyProfile(StrategyProfileBehavior.CLEAN_CONTROL_V1, "admin_override")
-            forceYaleSmart -> ActiveStrategyProfile(StrategyProfileBehavior.YALE_SMART, "admin_override")
-            else -> ActiveStrategyProfile(strategyProfile, "strategy")
+            forceLegacy -> strategy.copy(
+                strategyCode = StrategyProfileBehavior.LEGACY,
+                strategyProfile = StrategyProfileBehavior.LEGACY,
+                amnesiaWipeRequired = false,
+                strictTrackingProtection = false,
+                canvasSpoofingActive = false,
+                urlSanitize = false,
+            ) to "admin_override"
+            forceYaleSmart -> strategy.copy(
+                strategyCode = StrategyProfileBehavior.YALE_SMART,
+                strategyProfile = StrategyProfileBehavior.YALE_SMART,
+                amnesiaWipeRequired = true,
+                strictTrackingProtection = true,
+                canvasSpoofingActive = true,
+                urlSanitize = true,
+            ) to "admin_override"
+            else -> strategy to "strategy"
         }
     }
 
@@ -393,11 +406,6 @@ class DefaultPriceCheckCoordinator(
         val throwable = this ?: return "Unknown error"
         return throwable.message ?: throwable::class.java.simpleName
     }
-
-    private data class ActiveStrategyProfile(
-        val profile: String,
-        val selectionSource: String,
-    )
 
     private data class SanitizedUrl(
         val url: String,

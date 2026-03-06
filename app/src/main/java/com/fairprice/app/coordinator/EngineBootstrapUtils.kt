@@ -1,11 +1,36 @@
 package com.fairprice.app.coordinator
 
 import com.fairprice.app.engine.ExtractionResult
+import com.fairprice.app.engine.StrategyResult
 
 private const val ENGINE_HASH_KEY = "fp_engine"
+private const val CANVAS_SPOOF_KEY = "fp_canvas_spoof"
 
 /**
- * Appends or replaces the fp_engine token in the URL fragment for engine bootstrap telemetry.
+ * Builds execution URL fragment from strategy: fp_canvas_spoof when canvas spoofing is active,
+ * and fp_engine for telemetry (strategy code).
+ */
+fun buildEngineBootstrapUrl(executionUrl: String, strategy: StrategyResult): String {
+    val hashIndex = executionUrl.indexOf('#')
+    val base = if (hashIndex < 0) executionUrl else executionUrl.substring(0, hashIndex)
+    val existingHash = if (hashIndex < 0) "" else executionUrl.substring(hashIndex + 1)
+    val hashParts = existingHash
+        .split("&")
+        .filter { it.isNotBlank() }
+        .filterNot { part ->
+            val key = part.substringBefore('=').trim().lowercase()
+            key == ENGINE_HASH_KEY || key == CANVAS_SPOOF_KEY
+        }
+        .toMutableList()
+    hashParts += "$ENGINE_HASH_KEY=${strategy.effectiveStrategyCode()}"
+    if (strategy.canvasSpoofingActive) {
+        hashParts += "$CANVAS_SPOOF_KEY=true"
+    }
+    return if (hashParts.isEmpty()) base else "$base#${hashParts.joinToString("&")}"
+}
+
+/**
+ * Appends or replaces the fp_engine token in the URL fragment (fallback for legacy callers).
  */
 fun appendEngineBootstrapToken(executionUrl: String, tokenValue: String): String {
     val hashIndex = executionUrl.indexOf('#')

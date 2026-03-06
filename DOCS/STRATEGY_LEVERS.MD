@@ -40,7 +40,7 @@ Actions:
 Policy knobs:
 - Endpoint URL.
 - Timeout duration.
-- Fallback strategy (e.g., conservative clean_control_v1 or yale_smart).
+- Fallback strategy (e.g., conservative legacy or yale_smart).
 
 Key telemetry:
 - Railway call success/failure.

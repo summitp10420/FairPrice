@@ -5,5 +5,5 @@
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 
-# Optional: for Part B (Railway strategy engine)
-# RAILWAY_STRATEGY_ENDPOINT=https://fairprice-brain-production.up.railway.app/api/v1/strategy
+# Railway strategy engine (Part B)
+RAILWAY_STRATEGY_ENDPOINT=https://your-railway-domain.up.railway.app/api/v1/strategy

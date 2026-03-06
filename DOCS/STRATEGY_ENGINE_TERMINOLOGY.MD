@@ -19,7 +19,7 @@ The **strategy engine** is the model that selects which strategy profile to use.
 |------|------------|
 | **Strategy Engine** | The model that selects the strategy profile. Identified by **strategy_engine** in API/telemetry (e.g. railway_brain_v1.0). Lives on Railway (today); there can be multiple engines over time. |
 | **Strategy Name** | A label for the strategy result (e.g. policy name). Not the engine identifier. |
-| **Strategy Profile** | Open string returned by the engine (e.g. yale_smart, clean_control_v1). The selected runnable profile we deploy to beat the retailer. Stored in the backend; used in telemetry for effectiveness analytics. |
+| **Strategy Profile** | Open string returned by the engine (e.g. yale_smart, legacy). The selected runnable profile we deploy to beat the retailer. Stored in the backend; used in telemetry for effectiveness analytics. Canonical codes: `legacy`, `yale_smart`. Strategy definitions live in Supabase `strategy_profiles`; the engine references them by id; Android executes from the flat definition (booleans). |
 | **Strategy** | A `StrategyResult` payload (strategy profile, policy, URL tokens, proxy config, etc.) that tells the app how to run a spoof pass against the retailer. |
 | **Strategy Resolver** | App-side abstraction. Returns a `StrategyResult` for a given URL and tactics. Hides whether the result came from Railway or from a local fallback. The coordinator depends on this abstraction only. |
 | **Railway Strategy Client** | App-side component. Calls the Railway strategy engine API. Returns `StrategyResult` when the call succeeds. |

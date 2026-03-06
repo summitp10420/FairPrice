@@ -69,7 +69,7 @@ URL Token Contract (Gecko bootstrap):
 - Pass navigation URLs must include a single `fp_engine` hash token.
 - No existing fragment: append `#fp_engine=<token>`.
 - Existing fragment: append/replace token with `&fp_engine=<token>` inside hash params (never double-`#`).
-- Current token mapping: sniffer=`sniffer_intel`, clean-control extraction=`clean_control_intel`, spoof profile=`yale_smart` or `clean_control_v1`.
+- Current token mapping: sniffer=`sniffer_intel`, clean-control extraction=`clean_control_intel`, spoof profile=`yale_smart` or `legacy`.
 
 3.1 Current Modular Engine Boundaries
 - Strategy Resolution: `StrategyResolver` is the app-side abstraction. It returns a `StrategyResult` for `(url, tactics)`. The strategy engine lives on Railway. App implementations: `RailwayStrategyClient` (calls Railway) and `LocalStrategyFallback` (used when Railway is unreachable). See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.

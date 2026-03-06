@@ -43,7 +43,7 @@ class HomeViewModelTest {
         private const val TOKEN_SNIFFER_INTEL = "sniffer_intel"
         private const val TOKEN_CLEAN_CONTROL_INTEL = "clean_control_intel"
         private const val TOKEN_YALE_SMART = "yale_smart"
-        private const val TOKEN_CLEAN_CONTROL_V1 = "clean_control_v1"
+        private const val TOKEN_LEGACY = "legacy"
     }
 
     @Before
@@ -116,6 +116,11 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = "strat_test_123",
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
                     wireguardConfig = "wg-test-config",
                 ),
             ),
@@ -184,6 +189,11 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
                     wireguardConfig = "wg-test-config",
                     engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
                     engineSelectionReason = "bucket=23 domain=example.com",
@@ -228,6 +238,11 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
                     wireguardConfig = "wg-test-config",
                     engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
                     engineSelectionReason = "bucket=23 domain=example.com",
@@ -269,7 +284,17 @@ class HomeViewModelTest {
             ),
         )
         val strategyResolver = FakeStrategyResolver(
-            result = Result.success(StrategyResult(strategyId = null, wireguardConfig = "wg-test-config")),
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
+            ),
         )
         val inputUrl = "https://example.com/p/123"
         val viewModel = HomeViewModel(
@@ -336,6 +361,11 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
                     wireguardConfig = "wg-test-config",
                     engineSelectionPolicy = "domain_installation_bucket_v1_50_50",
                     engineSelectionReason = "bucket=23 domain=example.com",
@@ -428,7 +458,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val inputUrl = "https://example.com/p/123?sku=99"
@@ -504,7 +542,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 inputUrl to TOKEN_SNIFFER_INTEL,
-                inputUrl to TOKEN_CLEAN_CONTROL_V1,
+                inputUrl to TOKEN_LEGACY,
             ),
             extractionEngine.loadedUrls,
         )
@@ -520,7 +558,7 @@ class HomeViewModelTest {
             spoofAttempt.appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
         )
         assertEquals(
-            "clean_control_v1",
+            "legacy",
             spoofAttempt.appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
@@ -736,7 +774,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = "s_fallback", wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = "s_fallback",
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -786,7 +832,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = "s_waf_fallback", wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = "s_waf_fallback",
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -836,7 +890,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = "s_shadow", wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = "s_shadow",
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -947,7 +1009,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -1027,7 +1097,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -1062,7 +1140,15 @@ class HomeViewModelTest {
         )
         val strategyResolver = FakeStrategyResolver(
             result = Result.success(
-                StrategyResult(strategyId = null, wireguardConfig = "wg-test-config"),
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "yale_smart",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    wireguardConfig = "wg-test-config",
+                ),
             ),
         )
         val viewModel = HomeViewModel(
@@ -1259,19 +1345,18 @@ class HomeViewModelTest {
 
     private fun expectedUrlWithToken(url: String, token: String): String {
         val hashIndex = url.indexOf('#')
-        if (hashIndex < 0) {
-            return "$url#$TOKEN_KEY=$token"
-        }
-        val base = url.substring(0, hashIndex)
-        val existingHash = url.substring(hashIndex + 1)
+        val base = if (hashIndex < 0) url else url.substring(0, hashIndex)
+        val existingHash = if (hashIndex < 0) "" else url.substring(hashIndex + 1)
         val hashParts = existingHash
             .split("&")
             .filter { it.isNotBlank() }
             .filterNot { part ->
-                part.substringBefore('=').trim().equals(TOKEN_KEY, ignoreCase = true)
+                val key = part.substringBefore('=').trim().lowercase()
+                key == TOKEN_KEY.lowercase() || key == "fp_canvas_spoof"
             }
             .toMutableList()
         hashParts += "$TOKEN_KEY=$token"
+        if (token == TOKEN_YALE_SMART) hashParts += "fp_canvas_spoof=true"
         return "$base#${hashParts.joinToString("&")}"
     }
 }

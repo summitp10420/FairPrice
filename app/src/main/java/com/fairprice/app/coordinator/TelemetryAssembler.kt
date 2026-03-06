@@ -118,6 +118,8 @@ class TelemetryAssembler {
             if (amnesiaProtocol != null) put("amnesia_protocol", JsonPrimitive(amnesiaProtocol))
             if (trackingProtection != null) put("tracking_protection", JsonPrimitive(trackingProtection))
             if (strategy != null) {
+                strategy.strategyId?.let { put("strategy_id", JsonPrimitive(it)) }
+                put("strategy_code", JsonPrimitive(strategy.effectiveStrategyCode()))
                 put("strategy_name", JsonPrimitive(strategy.strategyName))
                 put("strategy_engine", JsonPrimitive(strategy.strategyEngineName))
                 put("strategy_version", JsonPrimitive(strategy.strategyVersion))

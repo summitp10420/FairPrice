@@ -25,6 +25,12 @@ val supabaseAnonKey = (
         ?: ""
 ).trim()
 
+val railwayStrategyEndpoint = (
+    localProperties.getProperty("RAILWAY_STRATEGY_ENDPOINT")
+        ?: localProperties.getProperty("railway_strategy_endpoint")
+        ?: ""
+).trim()
+
 android {
     namespace = "com.fairprice.app"
     compileSdk = 36
@@ -39,6 +45,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        buildConfigField("String", "RAILWAY_STRATEGY_ENDPOINT", "\"$railwayStrategyEndpoint\"")
         vectorDrawables {
             useSupportLibrary = true
         }

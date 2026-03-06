@@ -1,9 +1,9 @@
 (() => {
   const ENGINE_HASH_KEY = "fp_engine";
+  const CANVAS_SPOOF_KEY = "fp_canvas_spoof";
   const ENHANCED_VALUE = "yale_smart";
   const SNIFFER_INTEL_VALUE = "sniffer_intel";
-  const CONTROL_VALUE = "clean_control_v1";
-  const LEGACY_COMPAT_VALUE = "legacy";
+  const LEGACY_VALUE = "legacy";
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
   const HW_FP_MESSAGE_TYPE = "__fp_hw_fp_signal_v1";
@@ -23,6 +23,19 @@
     return null;
   }
 
+  function parseCanvasSpoofFromHash(hash) {
+    const raw = String(hash || "").replace(/^#/, "");
+    if (!raw) return false;
+    const parts = raw.split("&");
+    for (const part of parts) {
+      if (!part) continue;
+      const [rawKey, rawValue = ""] = part.split("=");
+      if (decodeURIComponent(rawKey || "").toLowerCase() !== CANVAS_SPOOF_KEY) continue;
+      return decodeURIComponent(rawValue || "").toLowerCase() === "true";
+    }
+    return false;
+  }
+
   function scrubEngineHashToken() {
     const raw = String(window.location.hash || "").replace(/^#/, "");
     if (!raw) return;
@@ -31,7 +44,7 @@
       .filter((part) => part)
       .filter((part) => {
         const key = decodeURIComponent(part.split("=")[0] || "").toLowerCase();
-        return key !== ENGINE_HASH_KEY;
+        return key !== ENGINE_HASH_KEY && key !== CANVAS_SPOOF_KEY;
       });
     const nextHash = kept.length > 0 ? `#${kept.join("&")}` : "";
     const cleanUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
@@ -127,16 +140,16 @@
   }
 
   const engine = parseEngineFromHash(window.location.hash);
+  const canvasSpoofFromHash = parseCanvasSpoofFromHash(window.location.hash);
   const isKnownProfile =
     engine === ENHANCED_VALUE ||
     engine === SNIFFER_INTEL_VALUE ||
-    engine === CONTROL_VALUE ||
-    engine === LEGACY_COMPAT_VALUE;
-  const enhanced = engine === ENHANCED_VALUE || engine === SNIFFER_INTEL_VALUE;
+    engine === LEGACY_VALUE;
+  const enhanced = canvasSpoofFromHash || engine === ENHANCED_VALUE || engine === SNIFFER_INTEL_VALUE;
   window[ENHANCED_FLAG] = enhanced;
   window[HW_FP_FLAG] = false;
 
-  if (isKnownProfile) {
+  if (isKnownProfile || canvasSpoofFromHash) {
     scrubEngineHashToken();
   }
 

@@ -6,7 +6,6 @@ import com.fairprice.app.engine.CleanSessionPreparationException
 import com.fairprice.app.engine.ExtractionEngine
 import com.fairprice.app.engine.ExtractionRequest
 import com.fairprice.app.engine.ExtractionResult
-import com.fairprice.app.engine.StrategyProfileBehavior
 import com.fairprice.app.engine.StrategyResult
 import kotlin.system.measureTimeMillis
 
@@ -32,7 +31,6 @@ class SpoofAttemptRunner(
 
     suspend fun execute(
         strategy: StrategyResult,
-        strategyProfile: String,
         engineSelectionSource: String,
         spoofExecutionUrl: String,
         spoofUrlSanitized: Boolean,
@@ -45,8 +43,9 @@ class SpoofAttemptRunner(
         val mutableDiagnostics = diagnostics.toMutableList()
         var spoofedResult: ExtractionResult? = null
         var terminalError: String? = null
-        val strictTrackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile) == "strict"
-        val navigationUrl = buildEngineBootstrapNavigationUrl(spoofExecutionUrl, strategyProfile)
+        val navigationUrl = buildEngineBootstrapUrl(spoofExecutionUrl, strategy)
+        val trackingProtectionStr = if (strategy.strictTrackingProtection) "strict" else "off"
+        val strategyProfileForTelemetry = strategy.effectiveStrategyCode()
 
         for (attempt in 0 until SPOOF_ATTEMPT_MAX) {
             val attemptNumber = attempt + 1
@@ -57,9 +56,9 @@ class SpoofAttemptRunner(
                 extractionResult = extractionEngine.loadAndExtract(
                     navigationUrl,
                     request = ExtractionRequest(
-                        cleanSessionRequired = true,
+                        cleanSessionRequired = strategy.amnesiaWipeRequired,
                         phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
-                        strictTrackingProtection = strictTrackingProtection,
+                        strictTrackingProtection = strategy.strictTrackingProtection,
                     ),
                 )
             }
@@ -80,10 +79,10 @@ class SpoofAttemptRunner(
                             executionUrl = spoofExecutionUrl,
                             appliedLevers = telemetryAssembler.buildAppliedLevers(
                                 urlSanitized = spoofUrlSanitized,
-                                amnesiaProtocol = true,
-                                trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
+                                amnesiaProtocol = strategy.amnesiaWipeRequired,
+                                trackingProtection = trackingProtectionStr,
                                 strategy = strategy,
-                                strategyProfile = strategyProfile,
+                                strategyProfile = strategyProfileForTelemetry,
                                 engineSelectionSource = engineSelectionSource,
                             ),
                         )
@@ -100,10 +99,10 @@ class SpoofAttemptRunner(
                             executionUrl = spoofExecutionUrl,
                             appliedLevers = telemetryAssembler.buildAppliedLevers(
                                 urlSanitized = spoofUrlSanitized,
-                                amnesiaProtocol = true,
-                                trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
+                                amnesiaProtocol = strategy.amnesiaWipeRequired,
+                                trackingProtection = trackingProtectionStr,
                                 strategy = strategy,
-                                strategyProfile = strategyProfile,
+                                strategyProfile = strategyProfileForTelemetry,
                                 engineSelectionSource = engineSelectionSource,
                             ),
                         )
@@ -129,9 +128,9 @@ class SpoofAttemptRunner(
                         appliedLevers = telemetryAssembler.buildAppliedLevers(
                             urlSanitized = spoofUrlSanitized,
                             amnesiaProtocol = !isCleanSessionPreparationFailure(throwable),
-                            trackingProtection = StrategyProfileBehavior.trackingProtection(strategyProfile),
+                            trackingProtection = trackingProtectionStr,
                             strategy = strategy,
-                            strategyProfile = strategyProfile,
+                            strategyProfile = strategyProfileForTelemetry,
                             engineSelectionSource = engineSelectionSource,
                         ),
                     )
@@ -163,7 +162,4 @@ class SpoofAttemptRunner(
             throwable?.cause is CleanSessionPreparationException
     }
 
-    private fun buildEngineBootstrapNavigationUrl(executionUrl: String, profileCode: String): String {
-        return appendEngineBootstrapToken(executionUrl, StrategyProfileBehavior.bootstrapTokenValue(profileCode))
-    }
 }

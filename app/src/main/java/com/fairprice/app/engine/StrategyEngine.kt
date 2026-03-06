@@ -17,20 +17,52 @@ interface StrategyResolver {
 
 @Serializable
 data class StrategyResult(
+    @SerialName("strategy_id")
     val strategyId: String? = null,
+    @SerialName("strategy_code")
+    val strategyCode: String = "",
+    @SerialName("amnesia_wipe_required")
+    val amnesiaWipeRequired: Boolean = false,
+    @SerialName("strict_tracking_protection")
+    val strictTrackingProtection: Boolean = false,
+    @SerialName("canvas_spoofing_active")
+    val canvasSpoofingActive: Boolean = false,
+    @SerialName("url_sanitize")
+    val urlSanitize: Boolean = false,
     val strategyName: String = "clean_strategy_v1.0",
     val strategyEngineName: String = "strategy_engine_v1.0",
     val strategyVersion: String = "1.0",
     val wireguardConfig: String = "",
     @SerialName("strategy_profile")
-    val strategyProfile: String = "yale_smart",
+    val strategyProfile: String = "",
     val engineSelectionPolicy: String? = null,
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
     val engineSelectionBucket: Int? = null,
     /** Reserved for Sprint 14 residential proxies. */
     val proxyConfig: JsonObject? = null,
-)
+) {
+    /** Effective profile code: from strategy_code or, for old payloads, strategy_profile. */
+    fun effectiveStrategyCode(): String =
+        strategyCode.ifBlank { strategyProfile.ifBlank { StrategyProfileBehavior.LEGACY } }
+
+    /**
+     * When backend sends only strategy_profile (old shape), derive strategyCode and booleans.
+     * Call after parsing so execution and telemetry use a full payload.
+     */
+    fun normalized(): StrategyResult {
+        if (strategyCode.isNotBlank()) return this
+        val code = strategyProfile.ifBlank { StrategyProfileBehavior.LEGACY }
+        return copy(
+            strategyId = null,
+            strategyCode = code,
+            amnesiaWipeRequired = StrategyProfileBehavior.amnesiaWipeRequired(code),
+            strictTrackingProtection = StrategyProfileBehavior.strictTrackingProtection(code),
+            canvasSpoofingActive = StrategyProfileBehavior.canvasSpoofingActive(code),
+            urlSanitize = StrategyProfileBehavior.requiresUrlSanitize(code),
+        )
+    }
+}
 
 /**
  * Local strategy fallback. Used when the Railway strategy engine is unreachable.
@@ -55,12 +87,18 @@ class LocalStrategyFallback(
         val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
         val assignmentKey = "$domain|$installationId"
         val bucket = bucketCalculator(assignmentKey).coerceIn(0, BUCKET_MODULUS - 1)
-        val strategyProfile = if (bucket < YALE_SMART_PERCENT) "yale_smart" else "clean_control_v1"
+        val strategyCode = if (bucket < YALE_SMART_PERCENT) StrategyProfileBehavior.YALE_SMART else StrategyProfileBehavior.LEGACY
+        val isYale = strategyCode == StrategyProfileBehavior.YALE_SMART
         return Result.success(
             StrategyResult(
                 strategyId = null,
+                strategyCode = strategyCode,
+                amnesiaWipeRequired = isYale,
+                strictTrackingProtection = isYale,
+                canvasSpoofingActive = isYale,
+                urlSanitize = isYale,
                 wireguardConfig = "",
-                strategyProfile = strategyProfile,
+                strategyProfile = strategyCode,
                 engineSelectionPolicy = ENGINE_SELECTION_POLICY,
                 engineSelectionReason = "bucket=$bucket domain=$domain",
                 engineSelectionKeyScope = ENGINE_SELECTION_SCOPE,

@@ -61,8 +61,8 @@ class RailwayStrategyClient(
                     setBody(json.encodeToString(payload))
                 }
                 val bodyText = response.bodyAsText()
-                val result = json.decodeFromString<StrategyResult>(bodyText)
-                Log.i(TAG, "Railway strategy received: ${result.strategyProfile} via ${result.engineSelectionPolicy}")
+                val result = json.decodeFromString<StrategyResult>(bodyText).normalized()
+                Log.i(TAG, "Railway strategy received: ${result.effectiveStrategyCode()} via ${result.engineSelectionPolicy}")
                 result
             }
         }.recoverCatching { throwable ->
