@@ -176,7 +176,7 @@ class FairPriceRepositoryImpl(
                 }
             }
 
-            val strategyRows =
+            var strategyRows =
                 collectRetailerStrategies(priceCheck, attempts).map { observed ->
                 RetailerStrategyRow(
                     retailerDomain = priceCheck.domain,
@@ -185,7 +185,17 @@ class FairPriceRepositoryImpl(
                     sourcePhase = observed.sourcePhase,
                 )
             }
-            if (strategyRows.isEmpty()) return@runCatching Unit
+            if (strategyRows.isEmpty()) {
+                val sourcePhase = extractTacticSourcePass(priceCheck)
+                strategyRows = listOf(
+                    RetailerStrategyRow(
+                        retailerDomain = priceCheck.domain,
+                        tactic = "none",
+                        observedAt = now,
+                        sourcePhase = sourcePhase,
+                    ),
+                )
+            }
             supabaseClient.postgrest["retailer_strategies"].insert(strategyRows)
             Unit
         }.onFailure { throwable ->
