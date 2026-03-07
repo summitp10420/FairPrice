@@ -58,19 +58,19 @@ interface StrategyResponse {
 
 const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize'] as const;
 
-/** Fallback when cache is empty (cold boot / Supabase unreachable) */
-const FALLBACK_CLEAN_BASELINE: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
+/** Fallback when cache is empty (cold boot / Supabase unreachable) - Tier 2 for WAF protection */
+const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
   strategy_id: null,
-  strategy_code: 'clean_baseline',
-  amnesia_wipe_required: false,
-  strict_tracking_protection: false,
+  strategy_code: 'amnesia_standard',
+  amnesia_wipe_required: true,
+  strict_tracking_protection: true,
   canvas_spoofing_active: false,
-  url_sanitize: false,
-  strategyName: 'Clean Baseline',
+  url_sanitize: true,
+  strategyName: 'Amnesia Standard',
   strategyEngineName: 'railway_brain_v2.0',
   strategyVersion: '2.0',
   wireguardConfig: '',
-  strategy_profile: 'clean_baseline',
+  strategy_profile: 'amnesia_standard',
   proxyConfig: null,
 };
 
@@ -182,7 +182,7 @@ function buildResponse(
 ): StrategyResponse {
   if (row === null) {
     return {
-      ...FALLBACK_CLEAN_BASELINE,
+      ...FALLBACK_AMNESIA_STANDARD,
       engineSelectionPolicy: policy,
       engineSelectionReason: reason,
       engineSelectionKeyScope: 'domain+anonymous_bucket',
@@ -231,13 +231,13 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
   if (cachedProfiles.length === 0) {
     row = null;
     policy = 'railway_tiered_v1_cold_boot_fallback';
-    reason += ' cache_empty=clean_baseline';
+    reason += ' cache_empty=amnesia_standard';
   } else {
     const isExplore = anonymous_bucket >= 75;
     if (isExplore) {
       selectionMode = 'explore';
       policy = 'railway_tiered_v1_epsilon_greedy_explore';
-      const randomTier = Math.floor(Math.random() * 4);
+      const randomTier = anonymous_bucket % 4;
       row = selectProfileByTier(randomTier);
       reason += ` explore_tier=${randomTier}`;
     } else {
