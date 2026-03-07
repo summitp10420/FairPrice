@@ -16,7 +16,18 @@ interface StrategyProfileRow {
   id: string;
   code: string;
   name: string;
+  tier: number;
   definition: {
+    amnesia_wipe_required?: boolean;
+    strict_tracking_protection?: boolean;
+    canvas_spoofing_active?: boolean;
+    url_sanitize?: boolean;
+  };
+}
+
+/** Tactic registry entry - only required_countermeasures used on critical path */
+interface TacticRegistryEntry {
+  required_countermeasures: {
     amnesia_wipe_required?: boolean;
     strict_tracking_protection?: boolean;
     canvas_spoofing_active?: boolean;
@@ -41,33 +52,30 @@ interface StrategyResponse {
   engineSelectionReason: string;
   engineSelectionKeyScope: string;
   engineSelectionBucket: number;
+  selection_mode: 'exploit' | 'explore';
   proxyConfig: null;
 }
 
-const STRICT_WAF_TACTICS = [
-  'vendor_datadome',
-  'vendor_perimeterx',
-  'block_datadome',
-  'hardware_fingerprinting',
-];
+const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize'] as const;
 
-/** Fallback legacy definition when Supabase is unreachable */
-const FALLBACK_LEGACY: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket'> = {
+/** Fallback when cache is empty (cold boot / Supabase unreachable) */
+const FALLBACK_CLEAN_BASELINE: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
   strategy_id: null,
-  strategy_code: 'legacy',
+  strategy_code: 'clean_baseline',
   amnesia_wipe_required: false,
   strict_tracking_protection: false,
   canvas_spoofing_active: false,
   url_sanitize: false,
-  strategyName: 'fallback_legacy',
-  strategyEngineName: 'railway_brain_v1.0',
-  strategyVersion: '1.0',
+  strategyName: 'Clean Baseline',
+  strategyEngineName: 'railway_brain_v2.0',
+  strategyVersion: '2.0',
   wireguardConfig: '',
-  strategy_profile: 'legacy',
+  strategy_profile: 'clean_baseline',
   proxyConfig: null,
 };
 
-let cachedProfiles: StrategyProfileRow[] | null = null;
+let cachedTacticRegistry: Record<string, TacticRegistryEntry> = {};
+let cachedProfiles: StrategyProfileRow[] = [];
 let supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
@@ -79,25 +87,90 @@ function getSupabase(): SupabaseClient | null {
   return supabase;
 }
 
-async function fetchStrategyProfiles(): Promise<StrategyProfileRow[]> {
-  if (cachedProfiles !== null) return cachedProfiles;
+/** Background refresh - no DB calls on critical path */
+async function refreshDataCaches(): Promise<void> {
   const client = getSupabase();
-  if (!client) return [];
-  const { data, error } = await client
-    .from('strategy_profiles')
-    .select('id, code, name, definition')
-    .eq('is_active', true);
-  if (error) {
-    console.warn('[FairPrice Brain] Supabase strategy_profiles fetch failed:', error.message);
-    return [];
+  if (!client) return;
+  try {
+    const [profilesRes, registryRes] = await Promise.all([
+      client
+        .from('strategy_profiles')
+        .select('id, code, name, tier, definition')
+        .eq('is_active', true)
+        .order('tier', { ascending: true }),
+      client
+        .from('tactic_registry')
+        .select('tactic_code, required_countermeasures')
+        .eq('has_active_countermeasure', true),
+    ]);
+
+    if (!profilesRes.error) {
+      cachedProfiles = (profilesRes.data ?? []).map((row: { id: string; code: string; name: string; tier?: number; definition: object }) => ({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        tier: typeof row.tier === 'number' ? row.tier : 0,
+        definition: (row.definition as StrategyProfileRow['definition']) ?? {},
+      }));
+      console.log(`[FairPrice Brain] Cached ${cachedProfiles.length} strategy profiles`);
+    } else {
+      console.warn('[FairPrice Brain] strategy_profiles fetch failed:', profilesRes.error.message);
+    }
+
+    if (!registryRes.error) {
+      const lookup: Record<string, TacticRegistryEntry> = {};
+      for (const row of registryRes.data ?? []) {
+        const code = (row as { tactic_code: string }).tactic_code;
+        const req = (row as { required_countermeasures: object }).required_countermeasures ?? {};
+        lookup[code] = { required_countermeasures: req as TacticRegistryEntry['required_countermeasures'] };
+      }
+      cachedTacticRegistry = lookup;
+      console.log(`[FairPrice Brain] Cached ${Object.keys(cachedTacticRegistry).length} tactic registry entries`);
+    } else {
+      console.warn('[FairPrice Brain] tactic_registry fetch failed:', registryRes.error.message);
+    }
+  } catch (err) {
+    console.warn('[FairPrice Brain] refreshDataCaches error:', err instanceof Error ? err.message : String(err));
   }
-  cachedProfiles = (data ?? []).map((row: { id: string; code: string; name: string; definition: object }) => ({
-    id: row.id,
-    code: row.code,
-    name: row.name,
-    definition: (row.definition as StrategyProfileRow['definition']) ?? {},
-  }));
-  return cachedProfiles;
+}
+
+function mergeRequiredCountermeasures(detected_tactics: string[]): Record<string, boolean> {
+  const merged: Record<string, boolean> = {
+    amnesia_wipe_required: false,
+    strict_tracking_protection: false,
+    canvas_spoofing_active: false,
+    url_sanitize: false,
+  };
+  for (const tactic of detected_tactics) {
+    const entry = cachedTacticRegistry[tactic];
+    if (!entry?.required_countermeasures) continue;
+    for (const lever of LEVERS) {
+      if (entry.required_countermeasures[lever] === true) {
+        merged[lever] = true;
+      }
+    }
+  }
+  return merged;
+}
+
+/** Profile qualifies if it has at least all required levers. */
+function profileQualifies(profile: StrategyProfileRow, required: Record<string, boolean>): boolean {
+  const def = profile.definition ?? {};
+  for (const lever of LEVERS) {
+    if (required[lever] === true && !(def[lever as keyof typeof def])) return false;
+  }
+  return true;
+}
+
+function selectLowestQualifyingProfile(required: Record<string, boolean>): StrategyProfileRow | null {
+  for (const profile of cachedProfiles) {
+    if (profileQualifies(profile, required)) return profile;
+  }
+  return null;
+}
+
+function selectProfileByTier(tier: number): StrategyProfileRow | null {
+  return cachedProfiles.find((p) => p.tier === tier) ?? cachedProfiles[0] ?? null;
 }
 
 function buildResponse(
@@ -105,14 +178,16 @@ function buildResponse(
   policy: string,
   reason: string,
   bucket: number,
+  selectionMode: 'exploit' | 'explore',
 ): StrategyResponse {
   if (row === null) {
     return {
-      ...FALLBACK_LEGACY,
+      ...FALLBACK_CLEAN_BASELINE,
       engineSelectionPolicy: policy,
       engineSelectionReason: reason,
       engineSelectionKeyScope: 'domain+anonymous_bucket',
       engineSelectionBucket: bucket,
+      selection_mode: selectionMode,
     };
   }
   const def = row.definition ?? {};
@@ -124,19 +199,21 @@ function buildResponse(
     canvas_spoofing_active: def.canvas_spoofing_active ?? false,
     url_sanitize: def.url_sanitize ?? false,
     strategyName: row.name,
-    strategyEngineName: 'railway_brain_v1.0',
-    strategyVersion: '1.0',
+    strategyEngineName: 'railway_brain_v2.0',
+    strategyVersion: '2.0',
     wireguardConfig: '',
     strategy_profile: row.code,
     engineSelectionPolicy: policy,
     engineSelectionReason: reason,
     engineSelectionKeyScope: 'domain+anonymous_bucket',
     engineSelectionBucket: bucket,
+    selection_mode: selectionMode,
     proxyConfig: null,
   };
 }
 
-app.post('/api/v1/strategy', async (req: Request, res: Response) => {
+/** Fully synchronous - zero DB calls on critical path */
+app.post('/api/v1/strategy', (req: Request, res: Response) => {
   const body = req.body as StrategyRequest;
   const domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
   const detected_tactics = Array.isArray(body?.detected_tactics)
@@ -146,28 +223,44 @@ app.post('/api/v1/strategy', async (req: Request, res: Response) => {
     ? Math.floor(Math.max(0, Math.min(99, body.anonymous_bucket)))
     : 0;
 
-  const requiresStrictAmnesia = STRICT_WAF_TACTICS.some((t) => detected_tactics.includes(t));
-
-  let selectedCode: 'legacy' | 'yale_smart' = 'legacy';
-  let policy = 'railway_dynamic_v1_50_50';
+  let policy = 'railway_tiered_v1_epsilon_greedy_exploit';
   let reason = `bucket=${anonymous_bucket} domain=${domain}`;
+  let selectionMode: 'exploit' | 'explore' = 'exploit';
+  let row: StrategyProfileRow | null = null;
 
-  if (requiresStrictAmnesia) {
-    selectedCode = 'yale_smart';
-    policy = 'railway_dynamic_v1_waf_override';
-    reason += ' waf_override=true';
-  } else if (anonymous_bucket < 50) {
-    selectedCode = 'yale_smart';
+  if (cachedProfiles.length === 0) {
+    row = null;
+    policy = 'railway_tiered_v1_cold_boot_fallback';
+    reason += ' cache_empty=clean_baseline';
+  } else {
+    const isExplore = anonymous_bucket >= 75;
+    if (isExplore) {
+      selectionMode = 'explore';
+      policy = 'railway_tiered_v1_epsilon_greedy_explore';
+      const randomTier = Math.floor(Math.random() * 4);
+      row = selectProfileByTier(randomTier);
+      reason += ` explore_tier=${randomTier}`;
+    } else {
+      selectionMode = 'exploit';
+      const required = mergeRequiredCountermeasures(detected_tactics);
+      row = selectLowestQualifyingProfile(required);
+      if (row) {
+        reason += ` tactics=[${detected_tactics.join(',')}] tier=${row.tier}`;
+      } else {
+        row = selectProfileByTier(0);
+        reason += ` no_qualify fallback_tier_0`;
+      }
+    }
   }
 
-  const profiles = await fetchStrategyProfiles();
-  const row = profiles.find((p) => p.code === selectedCode) ?? null;
-
-  const response = buildResponse(row, policy, reason, anonymous_bucket);
+  const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode);
   res.status(200).json(response);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`[FairPrice Brain] Active on port ${PORT}`);
+  refreshDataCaches().then(() => {
+    setInterval(refreshDataCaches, 60000);
+  });
 });

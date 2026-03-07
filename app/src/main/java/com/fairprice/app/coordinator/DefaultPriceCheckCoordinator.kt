@@ -88,6 +88,7 @@ class DefaultPriceCheckCoordinator(
                             tacticSourcePass = null,
                             cleanControlExecutionMode = preSpoof.cleanControlExecutionMode,
                             shadowSampled = preSpoof.shadowSampled,
+                            selectionMode = null,
                         )
                         val fallbackLogResult =
                             repository.logPriceCheckRun(failedPreSpoofCheck, preSpoof.attemptRows)
@@ -134,6 +135,7 @@ class DefaultPriceCheckCoordinator(
                                     tacticSourcePass = preSpoof.tacticSourcePass,
                                     cleanControlExecutionMode = preSpoof.cleanControlExecutionMode,
                                     shadowSampled = preSpoof.shadowSampled,
+                                    selectionMode = null,
                                 )
                                 val failedLogResult =
                                     repository.logPriceCheckRun(failedPriceCheck, preSpoof.attemptRows)
@@ -241,6 +243,7 @@ class DefaultPriceCheckCoordinator(
                 tacticSourcePass = preSpoof.tacticSourcePass,
                 cleanControlExecutionMode = preSpoof.cleanControlExecutionMode,
                 shadowSampled = preSpoof.shadowSampled,
+                selectionMode = strategy.selectionMode,
             )
             emitProcessing("Logging run result...")
             val failedLogResult = repository.logPriceCheckRun(failedPriceCheck, attemptRows)
@@ -284,6 +287,7 @@ class DefaultPriceCheckCoordinator(
             tacticSourcePass = preSpoof.tacticSourcePass,
             cleanControlExecutionMode = preSpoof.cleanControlExecutionMode,
             shadowSampled = preSpoof.shadowSampled,
+            selectionMode = strategy.selectionMode,
         )
 
         emitProcessing("Logging to database...")

@@ -39,6 +39,8 @@ data class StrategyResult(
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
     val engineSelectionBucket: Int? = null,
+    @SerialName("selection_mode")
+    val selectionMode: String? = null,
     /** Reserved for Sprint 14 residential proxies. */
     val proxyConfig: JsonObject? = null,
 ) {

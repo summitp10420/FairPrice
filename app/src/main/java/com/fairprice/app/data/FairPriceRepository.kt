@@ -241,6 +241,7 @@ class FairPriceRepositoryImpl(
             baselineSuccess = null,
             spoofSuccess = null,
             dirtyBaselinePriceCents = null,
+            selectionMode = null,
         )
     }
 

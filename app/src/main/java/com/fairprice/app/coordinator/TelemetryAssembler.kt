@@ -44,6 +44,7 @@ class TelemetryAssembler {
         tacticSourcePass: String?,
         cleanControlExecutionMode: String,
         shadowSampled: Boolean,
+        selectionMode: String? = null,
     ): PriceCheck {
         val domain = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
         return PriceCheck(
@@ -64,6 +65,7 @@ class TelemetryAssembler {
             baselineSuccess = baselineSuccess,
             spoofSuccess = spoofSuccess,
             dirtyBaselinePriceCents = dirtyBaselinePriceCents,
+            selectionMode = selectionMode,
             rawExtractionData = buildJsonObject {
                 put("detected_tactics", JsonArray(tactics.map { JsonPrimitive(it) }))
                 put("diagnostics", JsonArray(diagnostics.map { JsonPrimitive(it) }))

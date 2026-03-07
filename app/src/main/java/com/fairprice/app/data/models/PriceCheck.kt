@@ -45,6 +45,8 @@ data class PriceCheck(
     val spoofSuccess: Boolean? = null,
     @SerialName("dirty_baseline_price_cents")
     val dirtyBaselinePriceCents: Int? = null,
+    @SerialName("selection_mode")
+    val selectionMode: String? = null,
     @SerialName("raw_extraction_data")
     val rawExtractionData: JsonObject,
     @SerialName("created_at")
