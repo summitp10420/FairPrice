@@ -42,8 +42,8 @@ class HomeViewModelTest {
         private const val TOKEN_KEY = "fp_engine"
         private const val TOKEN_SNIFFER_INTEL = "sniffer_intel"
         private const val TOKEN_CLEAN_CONTROL_INTEL = "clean_control_intel"
-        private const val TOKEN_YALE_SMART = "yale_smart"
-        private const val TOKEN_LEGACY = "legacy"
+        private const val TOKEN_STEALTH_MAX = "stealth_max"
+        private const val TOKEN_CLEAN_BASELINE = "clean_baseline"
     }
 
     @Before
@@ -116,7 +116,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = "strat_test_123",
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -170,7 +170,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -189,7 +189,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -218,7 +218,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 canonicalUrl to TOKEN_SNIFFER_INTEL,
-                canonicalUrl to TOKEN_YALE_SMART,
+                canonicalUrl to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -238,7 +238,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -267,7 +267,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 originalShortUrl to TOKEN_SNIFFER_INTEL,
-                originalShortUrl to TOKEN_YALE_SMART,
+                originalShortUrl to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -287,7 +287,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -311,7 +311,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 inputUrl to TOKEN_SNIFFER_INTEL,
-                inputUrl to TOKEN_YALE_SMART,
+                inputUrl to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -361,7 +361,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -389,7 +389,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 "https://example.com/p/123?utm_source=ad&gclid=abc123&sku=99#details" to TOKEN_SNIFFER_INTEL,
-                "https://example.com/p/123?sku=99#details" to TOKEN_YALE_SMART,
+                "https://example.com/p/123?sku=99#details" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -414,7 +414,7 @@ class HomeViewModelTest {
             attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
         )
         assertEquals(
-            "yale_smart",
+            "stealth_max",
             attempts[1].appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
@@ -460,7 +460,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -484,7 +484,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 inputUrl to TOKEN_SNIFFER_INTEL,
-                inputUrl to TOKEN_YALE_SMART,
+                inputUrl to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -503,13 +503,13 @@ class HomeViewModelTest {
             attempts[1].appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
         )
         assertEquals(
-            "yale_smart",
+            "stealth_max",
             attempts[1].appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
     }
 
     @Test
-    fun adminOverride_forceLegacy_disablesSpoofSanitizationAndStrictTracking() = runTest(dispatcher) {
+    fun adminOverride_forceCleanBaseline_disablesSpoofSanitizationAndStrictTracking() = runTest(dispatcher) {
         val repository = FakeRepository()
         val extractionEngine = FakeExtractionEngine(
             extractionResults = mutableListOf(
@@ -522,7 +522,7 @@ class HomeViewModelTest {
                 StrategyResult(
                     strategyId = "s_legacy",
                     wireguardConfig = "wg-test-config",
-                    strategyProfile = "yale_smart",
+                    strategyProfile = "stealth_max",
                 ),
             ),
         )
@@ -534,7 +534,7 @@ class HomeViewModelTest {
             isAdminUser = true,
             shortUrlResolver = { it },
         )
-        viewModel.onEngineOverrideChanged(EngineOverride.FORCE_LEGACY)
+        viewModel.onEngineOverrideChanged(EngineOverride.FORCE_CLEAN_BASELINE)
         viewModel.onUrlInputChanged(inputUrl)
         viewModel.onCheckPriceClicked()
         advanceUntilIdle()
@@ -542,7 +542,7 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 inputUrl to TOKEN_SNIFFER_INTEL,
-                inputUrl to TOKEN_LEGACY,
+                inputUrl to TOKEN_CLEAN_BASELINE,
             ),
             extractionEngine.loadedUrls,
         )
@@ -558,7 +558,7 @@ class HomeViewModelTest {
             spoofAttempt.appliedLevers?.jsonObject?.get("tracking_protection")?.jsonPrimitive?.content,
         )
         assertEquals(
-            "legacy",
+            "clean_baseline",
             spoofAttempt.appliedLevers?.jsonObject?.get("strategy_profile")?.jsonPrimitive?.content,
         )
         assertEquals(
@@ -776,7 +776,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = "s_fallback",
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -801,7 +801,7 @@ class HomeViewModelTest {
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
                 "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -834,7 +834,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = "s_waf_fallback",
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -859,7 +859,7 @@ class HomeViewModelTest {
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
                 "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -892,7 +892,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = "s_shadow",
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -917,7 +917,7 @@ class HomeViewModelTest {
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
                 "https://example.com/p/123" to TOKEN_CLEAN_CONTROL_INTEL,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -1011,7 +1011,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -1034,8 +1034,8 @@ class HomeViewModelTest {
         assertEquals(
             expectedPassUrls(
                 "https://example.com/p/123" to TOKEN_SNIFFER_INTEL,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
-                "https://example.com/p/123" to TOKEN_YALE_SMART,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
+                "https://example.com/p/123" to TOKEN_STEALTH_MAX,
             ),
             extractionEngine.loadedUrls,
         )
@@ -1099,7 +1099,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -1142,7 +1142,7 @@ class HomeViewModelTest {
             result = Result.success(
                 StrategyResult(
                     strategyId = null,
-                    strategyCode = "yale_smart",
+                    strategyCode = "stealth_max",
                     amnesiaWipeRequired = true,
                     strictTrackingProtection = true,
                     canvasSpoofingActive = true,
@@ -1356,7 +1356,7 @@ class HomeViewModelTest {
             }
             .toMutableList()
         hashParts += "$TOKEN_KEY=$token"
-        if (token == TOKEN_YALE_SMART) hashParts += "fp_canvas_spoof=true"
+        if (token == TOKEN_STEALTH_MAX) hashParts += "fp_canvas_spoof=true"
         return "$base#${hashParts.joinToString("&")}"
     }
 }

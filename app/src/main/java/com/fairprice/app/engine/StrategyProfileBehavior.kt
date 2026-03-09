@@ -1,36 +1,40 @@
 package com.fairprice.app.engine
 
 /**
- * Fallback-only mapping from profile codes (legacy / yale_smart) to behavior.
+ * Fallback-only mapping from profile codes (Sprint 14) to behavior.
  * Used when the backend sends the old payload shape (only strategy_profile).
  * Execution uses flat booleans from StrategyResult when the new payload is present.
  */
 object StrategyProfileBehavior {
-    /** Profile code for Yale-style spoof: URL sanitize, strict tracking, canvas spoof. */
-    const val YALE_SMART = "yale_smart"
+    /** Profile code for tier 0: least aggressive, no countermeasures. */
+    const val CLEAN_BASELINE = "clean_baseline"
 
-    /** Profile code for legacy control: no sanitize, tracking off, no canvas spoof. */
-    const val LEGACY = "legacy"
+    /** Profile code for tier 3: maximum countermeasures. */
+    const val STEALTH_MAX = "stealth_max"
+
+    private val profilesWithUrlSanitize = setOf("shield_basic", "amnesia_standard", "stealth_max")
+    private val profilesWithStrictTracking = setOf("shield_basic", "amnesia_standard", "stealth_max")
+    private val profilesWithAmnesia = setOf("amnesia_standard", "stealth_max")
+    private val profilesWithCanvasSpoof = setOf("stealth_max")
 
     fun requiresUrlSanitize(profileCode: String): Boolean =
-        profileCode == YALE_SMART
+        profileCode in profilesWithUrlSanitize
 
     fun trackingProtection(profileCode: String): String =
-        if (profileCode == YALE_SMART) "strict" else "off"
+        if (profileCode in profilesWithStrictTracking) "strict" else "off"
 
     fun bootstrapTokenValue(profileCode: String): String =
         when (profileCode) {
-            YALE_SMART -> "yale_smart"
-            LEGACY -> "legacy"
-            else -> LEGACY
+            "clean_baseline", "shield_basic", "amnesia_standard", "stealth_max" -> profileCode
+            else -> CLEAN_BASELINE
         }
 
-    /** For old-payload backward compat: amnesia wipe required only for yale_smart. */
-    fun amnesiaWipeRequired(profileCode: String): Boolean = profileCode == YALE_SMART
+    fun amnesiaWipeRequired(profileCode: String): Boolean =
+        profileCode in profilesWithAmnesia
 
-    /** For old-payload backward compat: strict tracking only for yale_smart. */
-    fun strictTrackingProtection(profileCode: String): Boolean = profileCode == YALE_SMART
+    fun strictTrackingProtection(profileCode: String): Boolean =
+        profileCode in profilesWithStrictTracking
 
-    /** For old-payload backward compat: canvas spoofing only for yale_smart. */
-    fun canvasSpoofingActive(profileCode: String): Boolean = profileCode == YALE_SMART
+    fun canvasSpoofingActive(profileCode: String): Boolean =
+        profileCode in profilesWithCanvasSpoof
 }

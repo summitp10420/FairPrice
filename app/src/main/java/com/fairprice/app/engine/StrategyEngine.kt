@@ -46,7 +46,7 @@ data class StrategyResult(
 ) {
     /** Effective profile code: from strategy_code or, for old payloads, strategy_profile. */
     fun effectiveStrategyCode(): String =
-        strategyCode.ifBlank { strategyProfile.ifBlank { StrategyProfileBehavior.LEGACY } }
+        strategyCode.ifBlank { strategyProfile.ifBlank { StrategyProfileBehavior.CLEAN_BASELINE } }
 
     /**
      * When backend sends only strategy_profile (old shape), derive strategyCode and booleans.
@@ -54,7 +54,7 @@ data class StrategyResult(
      */
     fun normalized(): StrategyResult {
         if (strategyCode.isNotBlank()) return this
-        val code = strategyProfile.ifBlank { StrategyProfileBehavior.LEGACY }
+        val code = strategyProfile.ifBlank { StrategyProfileBehavior.CLEAN_BASELINE }
         return copy(
             strategyId = null,
             strategyCode = code,
@@ -68,43 +68,34 @@ data class StrategyResult(
 
 /**
  * Local strategy fallback. Used when the Railway strategy engine is unreachable.
+ * Always returns clean_baseline (least aggressive, clean session only).
  * Not an engine — it provides a strategy so the spoof run can proceed.
  */
 class LocalStrategyFallback(
     private val installationIdProvider: () -> String = { DEFAULT_INSTALLATION_ID },
-    private val bucketCalculator: (String) -> Int = { assignmentKey ->
-        (assignmentKey.hashCode() and Int.MAX_VALUE) % BUCKET_MODULUS
-    },
 ) : StrategyResolver {
     companion object {
         private const val DEFAULT_INSTALLATION_ID = "default_installation"
-        private const val BUCKET_MODULUS = 100
-        private const val YALE_SMART_PERCENT = 50
-        private const val ENGINE_SELECTION_POLICY = "domain_installation_bucket_v1_50_50"
-        private const val ENGINE_SELECTION_SCOPE = "domain+installation"
+        private const val ENGINE_SELECTION_POLICY = "local_fallback_clean_baseline"
     }
 
     override suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
         val domain = normalizeDomain(url)
         val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
-        val assignmentKey = "$domain|$installationId"
-        val bucket = bucketCalculator(assignmentKey).coerceIn(0, BUCKET_MODULUS - 1)
-        val strategyCode = if (bucket < YALE_SMART_PERCENT) StrategyProfileBehavior.YALE_SMART else StrategyProfileBehavior.LEGACY
-        val isYale = strategyCode == StrategyProfileBehavior.YALE_SMART
         return Result.success(
             StrategyResult(
                 strategyId = null,
-                strategyCode = strategyCode,
-                amnesiaWipeRequired = isYale,
-                strictTrackingProtection = isYale,
-                canvasSpoofingActive = isYale,
-                urlSanitize = isYale,
+                strategyCode = StrategyProfileBehavior.CLEAN_BASELINE,
+                amnesiaWipeRequired = false,
+                strictTrackingProtection = false,
+                canvasSpoofingActive = false,
+                urlSanitize = false,
                 wireguardConfig = "",
-                strategyProfile = strategyCode,
+                strategyProfile = StrategyProfileBehavior.CLEAN_BASELINE,
                 engineSelectionPolicy = ENGINE_SELECTION_POLICY,
-                engineSelectionReason = "bucket=$bucket domain=$domain",
-                engineSelectionKeyScope = ENGINE_SELECTION_SCOPE,
-                engineSelectionBucket = bucket,
+                engineSelectionReason = "domain=$domain installation=$installationId",
+                engineSelectionKeyScope = "domain+installation",
+                engineSelectionBucket = null,
             ),
         )
     }

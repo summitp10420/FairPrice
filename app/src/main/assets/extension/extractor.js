@@ -4,22 +4,29 @@
   const RETRY_DELAY_MS = 500;
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
+  const UA_FP_FLAG = "__fp_ua_profiling_detected";
   const HW_FP_MESSAGE_TYPE = "__fp_hw_fp_signal_v1";
+  const UA_FP_MESSAGE_TYPE = "__fp_ua_profiling_signal_v1";
   let didSend = false;
   let attempts = 0;
   let observer = null;
   let hardwareFingerprintingSeen = false;
+  let uaProfilingSeen = false;
 
-  function handleFingerprintSignalMessage(event) {
+  function handleSignalMessage(event) {
     if (event.source !== window) return;
     const payload = event.data;
     if (!payload || typeof payload !== "object") return;
-    if (payload.type !== HW_FP_MESSAGE_TYPE) return;
-    hardwareFingerprintingSeen = true;
-    window[HW_FP_FLAG] = true;
+    if (payload.type === HW_FP_MESSAGE_TYPE) {
+      hardwareFingerprintingSeen = true;
+      window[HW_FP_FLAG] = true;
+    } else if (payload.type === UA_FP_MESSAGE_TYPE) {
+      uaProfilingSeen = true;
+      window[UA_FP_FLAG] = true;
+    }
   }
 
-  window.addEventListener("message", handleFingerprintSignalMessage);
+  window.addEventListener("message", handleSignalMessage);
 
   function normalizePriceToCents(value) {
     if (!value) return null;
@@ -262,6 +269,12 @@
         window[HW_FP_FLAG] === true || hardwareFingerprintingSeen === true;
       if (hardwareFingerprintingDetectedNow) {
         tactics.add("hardware_fingerprinting");
+      }
+
+      const uaProfilingDetectedNow =
+        window[UA_FP_FLAG] === true || uaProfilingSeen === true;
+      if (uaProfilingDetectedNow) {
+        tactics.add("user_agent_profiling");
       }
     }
 

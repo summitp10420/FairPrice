@@ -1,14 +1,142 @@
 (() => {
   const ENGINE_HASH_KEY = "fp_engine";
   const CANVAS_SPOOF_KEY = "fp_canvas_spoof";
-  const ENHANCED_VALUE = "yale_smart";
+  const ENHANCED_VALUE = "stealth_max";
   const SNIFFER_INTEL_VALUE = "sniffer_intel";
-  const LEGACY_VALUE = "legacy";
+  const KNOWN_PROFILES = ["stealth_max", "clean_baseline", "shield_basic", "amnesia_standard", "sniffer_intel"];
   const ENHANCED_FLAG = "__fp_enhanced";
   const HW_FP_FLAG = "__fp_hardware_fingerprinting_detected";
+  const UA_FP_FLAG = "__fp_ua_profiling_detected";
   const HW_FP_MESSAGE_TYPE = "__fp_hw_fp_signal_v1";
+  const UA_FP_MESSAGE_TYPE = "__fp_ua_profiling_signal_v1";
   const HOOK_SENTINEL = "__fp_fp_hook_installed";
   const PAGE_HOOK_SENTINEL = "__fp_fp_page_hook_injected";
+
+  const accessLog = {
+    userAgent: false,
+    clientHints: false,
+    deviceMemory: false,
+    screenMetrics: false
+  };
+  let uaProfilingReported = false;
+
+  function evaluateUaProfiling() {
+    if (uaProfilingReported) return;
+    if ((accessLog.userAgent || accessLog.clientHints) && accessLog.deviceMemory && accessLog.screenMetrics) {
+      uaProfilingReported = true;
+      window[UA_FP_FLAG] = true;
+      window.postMessage({ type: UA_FP_MESSAGE_TYPE }, window.location.origin);
+    }
+  }
+
+  function installUaObserverInContentRealm() {
+    try {
+      const origUA = Object.getOwnPropertyDescriptor(Navigator.prototype, "userAgent");
+      if (origUA && origUA.configurable) {
+        Object.defineProperty(Navigator.prototype, "userAgent", {
+          get: function() {
+            accessLog.userAgent = true;
+            evaluateUaProfiling();
+            return origUA.get.call(this);
+          },
+          configurable: true,
+          enumerable: true
+        });
+      }
+    } catch (e) {}
+
+    try {
+      const origDM = Object.getOwnPropertyDescriptor(Navigator.prototype, "deviceMemory");
+      if (origDM && origDM.configurable) {
+        Object.defineProperty(Navigator.prototype, "deviceMemory", {
+          get: function() {
+            accessLog.deviceMemory = true;
+            evaluateUaProfiling();
+            return origDM.get.call(this);
+          },
+          configurable: true,
+          enumerable: true
+        });
+      }
+    } catch (e) {}
+
+    function wrapScreenGetter(origDesc) {
+      const origGet = origDesc && origDesc.get;
+      if (!origGet) return null;
+      return function() {
+        accessLog.screenMetrics = true;
+        evaluateUaProfiling();
+        return origGet.call(this);
+      };
+    }
+
+    try {
+      const origWidth = Object.getOwnPropertyDescriptor(Screen.prototype, "width");
+      if (origWidth && origWidth.configurable) {
+        const wrapped = wrapScreenGetter(origWidth);
+        if (wrapped) {
+          Object.defineProperty(Screen.prototype, "width", {
+            get: wrapped,
+            configurable: true,
+            enumerable: true
+          });
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const origHeight = Object.getOwnPropertyDescriptor(Screen.prototype, "height");
+      if (origHeight && origHeight.configurable) {
+        const wrappedH = wrapScreenGetter(origHeight);
+        if (wrappedH) {
+          Object.defineProperty(Screen.prototype, "height", {
+            get: wrappedH,
+            configurable: true,
+            enumerable: true
+          });
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const origAvailWidth = Object.getOwnPropertyDescriptor(Screen.prototype, "availWidth");
+      if (origAvailWidth && origAvailWidth.configurable) {
+        const wrappedAW = wrapScreenGetter(origAvailWidth);
+        if (wrappedAW) {
+          Object.defineProperty(Screen.prototype, "availWidth", {
+            get: wrappedAW,
+            configurable: true,
+            enumerable: true
+          });
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const origAvailHeight = Object.getOwnPropertyDescriptor(Screen.prototype, "availHeight");
+      if (origAvailHeight && origAvailHeight.configurable) {
+        const wrappedAH = wrapScreenGetter(origAvailHeight);
+        if (wrappedAH) {
+          Object.defineProperty(Screen.prototype, "availHeight", {
+            get: wrappedAH,
+            configurable: true,
+            enumerable: true
+          });
+        }
+      }
+    } catch (e) {}
+
+    try {
+      if (navigator.userAgentData && typeof navigator.userAgentData.getHighEntropyValues === "function") {
+        const origGetHighEntropyValues = navigator.userAgentData.getHighEntropyValues.bind(navigator.userAgentData);
+        navigator.userAgentData.getHighEntropyValues = function(...args) {
+          accessLog.clientHints = true;
+          evaluateUaProfiling();
+          return origGetHighEntropyValues(...args);
+        };
+      }
+    } catch (e) {}
+  }
 
   function parseEngineFromHash(hash) {
     const raw = String(hash || "").replace(/^#/, "");
@@ -141,13 +269,12 @@
 
   const engine = parseEngineFromHash(window.location.hash);
   const canvasSpoofFromHash = parseCanvasSpoofFromHash(window.location.hash);
-  const isKnownProfile =
-    engine === ENHANCED_VALUE ||
-    engine === SNIFFER_INTEL_VALUE ||
-    engine === LEGACY_VALUE;
+  const isKnownProfile = engine && KNOWN_PROFILES.includes(engine);
   const enhanced = canvasSpoofFromHash || engine === ENHANCED_VALUE || engine === SNIFFER_INTEL_VALUE;
+
   window[ENHANCED_FLAG] = enhanced;
   window[HW_FP_FLAG] = false;
+  window[UA_FP_FLAG] = false;
 
   if (isKnownProfile || canvasSpoofFromHash) {
     scrubEngineHashToken();
@@ -156,5 +283,6 @@
   if (enhanced) {
     installCanvasObserverInContentRealm();
     installCanvasObserverFallbackInPageRealm();
+    installUaObserverInContentRealm();
   }
 })();
