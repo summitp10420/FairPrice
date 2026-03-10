@@ -59,6 +59,7 @@ class SpoofAttemptRunner(
                         cleanSessionRequired = strategy.amnesiaWipeRequired,
                         phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
                         strictTrackingProtection = strategy.strictTrackingProtection,
+                        userAgentOverride = strategy.userAgentOverride.takeIf { strategy.uaSpoofingActive },
                     ),
                 )
             }

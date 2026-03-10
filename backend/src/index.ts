@@ -22,6 +22,8 @@ interface StrategyProfileRow {
     strict_tracking_protection?: boolean;
     canvas_spoofing_active?: boolean;
     url_sanitize?: boolean;
+    ua_spoofing_active?: boolean;
+    persona_profile?: string;
   };
 }
 
@@ -32,6 +34,7 @@ interface TacticRegistryEntry {
     strict_tracking_protection?: boolean;
     canvas_spoofing_active?: boolean;
     url_sanitize?: boolean;
+    ua_spoofing_active?: boolean;
   };
 }
 
@@ -43,6 +46,9 @@ interface StrategyResponse {
   strict_tracking_protection: boolean;
   canvas_spoofing_active: boolean;
   url_sanitize: boolean;
+  ua_spoofing_active: boolean;
+  user_agent_override: string | null;
+  persona_profile: string | null;
   strategyName: string;
   strategyEngineName: string;
   strategyVersion: string;
@@ -56,7 +62,14 @@ interface StrategyResponse {
   proxyConfig: null;
 }
 
-const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize'] as const;
+/** Row from persona_catalog */
+interface PersonaCatalogRow {
+  code: string;
+  user_agent: string;
+  is_active: boolean;
+}
+
+const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize', 'ua_spoofing_active'] as const;
 
 /** Fallback when cache is empty (cold boot / Supabase unreachable) - Tier 2 for WAF protection */
 const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
@@ -66,6 +79,9 @@ const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' 
   strict_tracking_protection: true,
   canvas_spoofing_active: false,
   url_sanitize: true,
+  ua_spoofing_active: false,
+  user_agent_override: null,
+  persona_profile: null,
   strategyName: 'Amnesia Standard',
   strategyEngineName: 'railway_brain_v2.0',
   strategyVersion: '2.0',
@@ -76,6 +92,7 @@ const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' 
 
 let cachedTacticRegistry: Record<string, TacticRegistryEntry> = {};
 let cachedProfiles: StrategyProfileRow[] = [];
+let cachedPersonaCatalog: Record<string, PersonaCatalogRow> = {};
 let supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
@@ -92,7 +109,7 @@ async function refreshDataCaches(): Promise<void> {
   const client = getSupabase();
   if (!client) return;
   try {
-    const [profilesRes, registryRes] = await Promise.all([
+    const [profilesRes, registryRes, personaRes] = await Promise.all([
       client
         .from('strategy_profiles')
         .select('id, code, name, tier, definition')
@@ -100,8 +117,11 @@ async function refreshDataCaches(): Promise<void> {
         .order('tier', { ascending: true }),
       client
         .from('tactic_registry')
-        .select('tactic_code, required_countermeasures')
-        .eq('has_active_countermeasure', true),
+        .select('tactic_code, required_countermeasures'),
+      client
+        .from('persona_catalog')
+        .select('code, user_agent, is_active')
+        .eq('is_active', true),
     ]);
 
     if (!profilesRes.error) {
@@ -129,6 +149,18 @@ async function refreshDataCaches(): Promise<void> {
     } else {
       console.warn('[FairPrice Brain] tactic_registry fetch failed:', registryRes.error.message);
     }
+
+    if (!personaRes.error) {
+      const lookup: Record<string, PersonaCatalogRow> = {};
+      for (const row of personaRes.data ?? []) {
+        const r = row as { code: string; user_agent: string; is_active: boolean };
+        lookup[r.code] = { code: r.code, user_agent: r.user_agent, is_active: r.is_active };
+      }
+      cachedPersonaCatalog = lookup;
+      console.log(`[FairPrice Brain] Cached ${Object.keys(cachedPersonaCatalog).length} persona catalog entries`);
+    } else {
+      console.warn('[FairPrice Brain] persona_catalog fetch failed:', personaRes.error.message);
+    }
   } catch (err) {
     console.warn('[FairPrice Brain] refreshDataCaches error:', err instanceof Error ? err.message : String(err));
   }
@@ -140,6 +172,7 @@ function mergeRequiredCountermeasures(detected_tactics: string[]): Record<string
     strict_tracking_protection: false,
     canvas_spoofing_active: false,
     url_sanitize: false,
+    ua_spoofing_active: false,
   };
   for (const tactic of detected_tactics) {
     const entry = cachedTacticRegistry[tactic];
@@ -173,6 +206,13 @@ function selectProfileByTier(tier: number): StrategyProfileRow | null {
   return cachedProfiles.find((p) => p.tier === tier) ?? cachedProfiles[0] ?? null;
 }
 
+function resolveUserAgentOverride(personaProfile: string | undefined): string | null {
+  if (!personaProfile || !personaProfile.trim()) return null;
+  const persona = cachedPersonaCatalog[personaProfile.trim()];
+  if (!persona?.is_active || !persona.user_agent) return null;
+  return persona.user_agent;
+}
+
 function buildResponse(
   row: StrategyProfileRow | null,
   policy: string,
@@ -191,6 +231,11 @@ function buildResponse(
     };
   }
   const def = row.definition ?? {};
+  const uaSpoofingActive = def.ua_spoofing_active ?? false;
+  const personaProfile = def.persona_profile ?? null;
+  const userAgentOverride = uaSpoofingActive && personaProfile
+    ? resolveUserAgentOverride(personaProfile)
+    : null;
   return {
     strategy_id: row.id,
     strategy_code: row.code,
@@ -198,6 +243,9 @@ function buildResponse(
     strict_tracking_protection: def.strict_tracking_protection ?? false,
     canvas_spoofing_active: def.canvas_spoofing_active ?? false,
     url_sanitize: def.url_sanitize ?? false,
+    ua_spoofing_active: uaSpoofingActive,
+    user_agent_override: userAgentOverride,
+    persona_profile: userAgentOverride != null ? personaProfile : null,
     strategyName: row.name,
     strategyEngineName: 'railway_brain_v2.0',
     strategyVersion: '2.0',

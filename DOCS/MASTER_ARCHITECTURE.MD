@@ -1,5 +1,5 @@
-Last Updated: 2026-03-05
-Current Phase: Sprint 13 Railway — Aligning architecture with strategy/engine terminology and preparing for Railway strategy engine deployment.
+Last Updated: 2026-03-06
+Current Phase: Sprint 14 — Tactic Registry & Dynamic Rules Engine. Backend uses tiered strategy profiles, tactic-driven profile selection, and epsilon-greedy exploration.
 
 1. Project Overview & Objective
 FairPrice is an Android application designed to defeat dynamic and personalized pricing strategies employed by online retailers (referencing tactics outlined in the Jan 2025 FTC report).
@@ -69,14 +69,24 @@ URL Token Contract (Gecko bootstrap):
 - Pass navigation URLs must include a single `fp_engine` hash token.
 - No existing fragment: append `#fp_engine=<token>`.
 - Existing fragment: append/replace token with `&fp_engine=<token>` inside hash params (never double-`#`).
-- Current token mapping: sniffer=`sniffer_intel`, clean-control extraction=`clean_control_intel`, spoof profile=`yale_smart` or `legacy`.
+- Current token mapping: sniffer=`sniffer_intel`, clean-control extraction=`clean_control_intel`, spoof profile=`<strategy_profile>` from backend (e.g. `clean_baseline`, `shield_basic`, `amnesia_standard`, `stealth_max`).
 
-3.1 Current Modular Engine Boundaries
-- Strategy Resolution: `StrategyResolver` is the app-side abstraction. It returns a `StrategyResult` for `(url, tactics)`. The strategy engine lives on Railway. App implementations: `RailwayStrategyClient` (calls Railway) and `LocalStrategyFallback` (used when Railway is unreachable). See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
+3.1 Backend Strategy Engine (Railway)
+The strategy engine runs on Railway. It is fully synchronous on the critical path: zero database calls during request handling.
+
+- In-memory cache: `strategy_profiles` and `tactic_registry` are fetched from Supabase on startup and refreshed every 60 seconds in the background.
+- Profile selection: Merges `required_countermeasures` from detected tactics (via `tactic_registry`), then selects the lowest-tier profile that satisfies all requirements.
+- Epsilon-greedy (75/25): For `anonymous_bucket` 0–74, exploit (tactic-driven selection); for 75–99, explore (deterministic tier from `bucket % 4`).
+- Cold-boot fallback: When cache is empty, returns tier 2 (`amnesia_standard`) to reduce WAF blocking.
+- Returns: `strategy_profile` (code), flat lever booleans, `selection_mode` (`exploit`|`explore`), and engine metadata. See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
+
+3.2 App-Side Modular Boundaries
+- Strategy Resolution: `StrategyResolver` is the app-side abstraction. It returns a `StrategyResult` for `(url, tactics)`. App implementations: `RailwayStrategyClient` (calls Railway) and `LocalStrategyFallback` (used when Railway is unreachable). See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
+- Admin Engine Override: When `isAdmin` is true, admins may force a specific strategy profile via `EngineOverride` (AUTO, FORCE_CLEAN_BASELINE, FORCE_SHIELD_BASIC, FORCE_AMNESIA_STANDARD, FORCE_STEALTH_MAX). The coordinator's `resolveActiveStrategy` overrides the engine result when a non-AUTO override is selected.
 - Extraction Module: `ExtractionEngine` returns structured `ExtractionResult` and remains the boundary between WebExtension payload parsing and ViewModel orchestration.
 - Orchestration Boundary: `HomeViewModel` coordinates sniffer -> optional clean-control (fallback or shadow) -> strategy resolution -> spoof chain -> persistence -> shopping mode, but does not own strategy or extraction internals.
 - Composition Root: `MainActivity` wires `StrategyResolver` (and other dependencies) into `HomeViewModel` via dependency injection (ViewModel factory).
-- Persistence Contract: Successful price checks must persist baseline and spoofed prices. `strategyId` should be persisted when available and remains nullable during stub strategy phases.
+- Persistence Contract: Successful price checks must persist baseline and spoofed prices. `strategyId` should be persisted when available and remains nullable. `selection_mode` (exploit/explore) is persisted for analytics.
 - UX Contract: Successful checks must show summary-first and only reveal Gecko shopping content after explicit user action.
 
 4. Database Schema Structure (Supabase)
@@ -88,7 +98,13 @@ retailers: Tracks known e-commerce sites (domain names) and active tracking stat
 
 retailer_strategies: A historical log of known pricing tactics (e.g., Geolocation profiling, IP tracking) employed by specific retailers, valid from/to specific dates.
 
-price_checks: The core transactional table. Logs user ID, retailer, original URL, original price, found price, geolocation used, timestamp, and an optional user note.
+strategy_profiles: Defines runnable profiles (code, name, tier, definition) used by the Railway engine. Profiles are tiered (0–3); the engine selects the lowest qualifying profile based on tactics. See `DOCS/migrations/sprint14_tactic_registry.sql`.
+
+tactic_registry: Maps tactic codes (e.g. `vendor_perimeterx`, `block_datadome`) to `required_countermeasures`. The engine merges requirements from detected tactics and selects a qualifying profile.
+
+price_checks: The core transactional table. Logs user ID, retailer, original URL, original price, found price, geolocation used, timestamp, optional user note, and `selection_mode` (exploit/explore) for epsilon-greedy analytics.
+
+strategy_win_rates: Analytics view aggregating win rates by domain and strategy_name.
 
 app_telemetry: Tracks the performance of the app itself (e.g., GeckoView crash logs, WebExtension extraction timeouts, strategy resolution failures).
 
@@ -119,7 +135,8 @@ Strategy evolution should be tracked in a dedicated lever catalog so policy chan
 Canonical documents:
 - `DOCS/STRATEGY_LEVERS.MD` — strategy policy levers
 - `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD` — strategy/engine mental model
-- `DOCS/SPRINT_13_IMPLEMENTATION_PLAN.MD` — refactor and Railway deployment plan
+- `DOCS/SPRINT_13_IMPLEMENTATION_PLAN.MD` — Part A/B alignment and Railway deployment
+- `DOCS/migrations/sprint14_tactic_registry.sql` — tiered profiles, tactic_registry, selection_mode
 
 Maintenance rule:
 - Any new strategy behavior (rotation, config management, extraction pathing, retry/cooldown, telemetry dimensions) must update `DOCS/STRATEGY_LEVERS.MD` in the same phase.

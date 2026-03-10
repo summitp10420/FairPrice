@@ -1,6 +1,7 @@
 package com.fairprice.app.coordinator
 
 import android.util.Log
+import com.fairprice.app.viewmodel.EngineOverride
 import com.fairprice.app.coordinator.model.CoordinatorProcessState
 import com.fairprice.app.coordinator.model.CoordinatorState
 import com.fairprice.app.coordinator.model.StartPriceCheckParams
@@ -147,8 +148,7 @@ class DefaultPriceCheckCoordinator(
 
                         val (activeStrategy, selectionSource) = resolveActiveStrategy(
                             strategy = strategy,
-                            forceLegacy = params.adminOverrideForceLegacy,
-                            forceYaleSmart = params.adminOverrideForceYaleSmart,
+                            adminEngineOverride = params.adminEngineOverride,
                             isAdmin = params.isAdmin,
                         )
                         val spoofUrlPlan = if (activeStrategy.urlSanitize) {
@@ -374,31 +374,50 @@ class DefaultPriceCheckCoordinator(
 
     private fun resolveActiveStrategy(
         strategy: StrategyResult,
-        forceLegacy: Boolean,
-        forceYaleSmart: Boolean,
+        adminEngineOverride: EngineOverride,
         isAdmin: Boolean,
     ): Pair<StrategyResult, String> {
-        if (!isAdmin || (!forceLegacy && !forceYaleSmart)) {
+        if (!isAdmin || adminEngineOverride == EngineOverride.AUTO) {
             return strategy to "strategy"
         }
-        return when {
-            forceLegacy -> strategy.copy(
-                strategyCode = StrategyProfileBehavior.LEGACY,
-                strategyProfile = StrategyProfileBehavior.LEGACY,
+        return when (adminEngineOverride) {
+            EngineOverride.AUTO -> strategy to "strategy"
+            EngineOverride.FORCE_CLEAN_BASELINE -> strategy.copy(
+                strategyCode = "clean_baseline",
+                strategyProfile = "clean_baseline",
+                strategyName = "Clean Baseline",
                 amnesiaWipeRequired = false,
                 strictTrackingProtection = false,
                 canvasSpoofingActive = false,
                 urlSanitize = false,
             ) to "admin_override"
-            forceYaleSmart -> strategy.copy(
-                strategyCode = StrategyProfileBehavior.YALE_SMART,
-                strategyProfile = StrategyProfileBehavior.YALE_SMART,
+            EngineOverride.FORCE_SHIELD_BASIC -> strategy.copy(
+                strategyCode = "shield_basic",
+                strategyProfile = "shield_basic",
+                strategyName = "Shield Basic",
+                amnesiaWipeRequired = false,
+                strictTrackingProtection = true,
+                canvasSpoofingActive = false,
+                urlSanitize = true,
+            ) to "admin_override"
+            EngineOverride.FORCE_AMNESIA_STANDARD -> strategy.copy(
+                strategyCode = "amnesia_standard",
+                strategyProfile = "amnesia_standard",
+                strategyName = "Amnesia Standard",
+                amnesiaWipeRequired = true,
+                strictTrackingProtection = true,
+                canvasSpoofingActive = false,
+                urlSanitize = true,
+            ) to "admin_override"
+            EngineOverride.FORCE_STEALTH_MAX -> strategy.copy(
+                strategyCode = "stealth_max",
+                strategyProfile = "stealth_max",
+                strategyName = "Stealth Max",
                 amnesiaWipeRequired = true,
                 strictTrackingProtection = true,
                 canvasSpoofingActive = true,
                 urlSanitize = true,
             ) to "admin_override"
-            else -> strategy to "strategy"
         }
     }
 

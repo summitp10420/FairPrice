@@ -1,5 +1,6 @@
 package com.fairprice.app.coordinator.model
 
+import com.fairprice.app.viewmodel.EngineOverride
 import com.fairprice.app.viewmodel.SummaryData
 
 sealed interface CoordinatorProcessState {
@@ -17,7 +18,6 @@ data class CoordinatorState(
 data class StartPriceCheckParams(
     val rawSubmittedUrl: String,
     val dirtyBaselinePriceCents: Int?,
-    val adminOverrideForceLegacy: Boolean,
-    val adminOverrideForceYaleSmart: Boolean,
+    val adminEngineOverride: EngineOverride,
     val isAdmin: Boolean,
 )

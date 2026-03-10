@@ -35,6 +35,12 @@ data class StrategyResult(
     val wireguardConfig: String = "",
     @SerialName("strategy_profile")
     val strategyProfile: String = "",
+    @SerialName("ua_spoofing_active")
+    val uaSpoofingActive: Boolean = false,
+    @SerialName("user_agent_override")
+    val userAgentOverride: String? = null,
+    @SerialName("persona_profile")
+    val personaProfile: String? = null,
     val engineSelectionPolicy: String? = null,
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
@@ -62,6 +68,9 @@ data class StrategyResult(
             strictTrackingProtection = StrategyProfileBehavior.strictTrackingProtection(code),
             canvasSpoofingActive = StrategyProfileBehavior.canvasSpoofingActive(code),
             urlSanitize = StrategyProfileBehavior.requiresUrlSanitize(code),
+            uaSpoofingActive = StrategyProfileBehavior.uaSpoofingActive(code),
+            userAgentOverride = null,
+            personaProfile = null,
         )
     }
 }

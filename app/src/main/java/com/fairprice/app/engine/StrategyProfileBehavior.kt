@@ -37,4 +37,9 @@ object StrategyProfileBehavior {
 
     fun canvasSpoofingActive(profileCode: String): Boolean =
         profileCode in profilesWithCanvasSpoof
+
+    private val profilesWithUaSpoof = setOf("stealth_max")
+
+    fun uaSpoofingActive(profileCode: String): Boolean =
+        profileCode in profilesWithUaSpoof
 }

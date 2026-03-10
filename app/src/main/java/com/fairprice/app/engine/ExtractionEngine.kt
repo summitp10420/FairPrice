@@ -41,6 +41,7 @@ data class ExtractionRequest(
     val cleanSessionRequired: Boolean = false,
     val phase: String = "default",
     val strictTrackingProtection: Boolean = false,
+    val userAgentOverride: String? = null,
 )
 
 class CleanSessionPreparationException(message: String, cause: Throwable? = null) :
@@ -78,6 +79,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         val extension = awaitBuiltInExtension()
         val sessionSwap = createFreshSession(request)
         val session = sessionSwap.newSession
+        retireOldSession(sessionSwap.oldSession)
         attachDelegate(extension, session)
         if (request.cleanSessionRequired) {
             wipeStorageForCleanSession(request)
@@ -97,9 +99,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                         tag,
                         "Session load started for URL: $url (session=${session.hashCode()})",
                     )
-                    retireOldSession(sessionSwap.oldSession)
                 } catch (throwable: Throwable) {
-                    retireOldSession(sessionSwap.oldSession)
                     clearPendingExtraction(continuation)
                     if (continuation.isActive) {
                         continuation.cancel(
@@ -204,6 +204,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         val oldSession = _currentSession.value
         val newSession = GeckoSession().apply { open(runtime) }
         applyTrackingProtection(newSession, request)
+        applyPersonaSpoofing(newSession, request)
         _currentSession.value = newSession
         Log.i(
             tag,
@@ -253,6 +254,17 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             tag,
             "Tracking protection strict requested (phase=${request.phase}, useTPApplied=$useTrackingProtectionApplied, strictLevelApplied=$strictLevelApplied)",
         )
+    }
+
+    private fun applyPersonaSpoofing(session: GeckoSession, request: ExtractionRequest) {
+        val ua = request.userAgentOverride
+        if (ua == null || ua.isBlank()) return
+        runCatching {
+            session.settings.userAgentOverride = ua
+            Log.i(tag, "User-Agent override applied (phase=${request.phase})")
+        }.onFailure { throwable ->
+            Log.w(tag, "Failed to apply User-Agent override (phase=${request.phase})", throwable)
+        }
     }
 
     private fun retireOldSession(oldSession: GeckoSession?) {

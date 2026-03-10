@@ -129,18 +129,38 @@ fun HomeScreen(
                         Text("Auto")
                     }
                     OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_LEGACY) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_LEGACY,
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_CLEAN_BASELINE) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_CLEAN_BASELINE,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Clean Control")
+                        Text("T0")
                     }
                     OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_YALE_SMART) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_YALE_SMART,
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_SHIELD_BASIC) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_SHIELD_BASIC,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Yale-Smart")
+                        Text("T1")
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_AMNESIA_STANDARD) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_AMNESIA_STANDARD,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("T2")
+                    }
+                    OutlinedButton(
+                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_STEALTH_MAX) },
+                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_STEALTH_MAX,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("T3")
                     }
                 }
             }

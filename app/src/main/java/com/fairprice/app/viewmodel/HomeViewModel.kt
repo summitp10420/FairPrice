@@ -32,8 +32,10 @@ sealed interface HomeProcessState {
 
 enum class EngineOverride {
     AUTO,
-    FORCE_LEGACY,
-    FORCE_YALE_SMART,
+    FORCE_CLEAN_BASELINE,
+    FORCE_SHIELD_BASIC,
+    FORCE_AMNESIA_STANDARD,
+    FORCE_STEALTH_MAX,
 }
 
 data class SummaryData(
@@ -193,8 +195,7 @@ class HomeViewModel(
             StartPriceCheckParams(
                 rawSubmittedUrl = rawSubmittedUrl,
                 dirtyBaselinePriceCents = dirtyBaselinePriceCents,
-                adminOverrideForceLegacy = _uiState.value.adminEngineOverride == EngineOverride.FORCE_LEGACY,
-                adminOverrideForceYaleSmart = _uiState.value.adminEngineOverride == EngineOverride.FORCE_YALE_SMART,
+                adminEngineOverride = _uiState.value.adminEngineOverride,
                 isAdmin = _uiState.value.isAdmin,
             ),
         )
