@@ -129,7 +129,7 @@ class TelemetryAssembler {
                 strategy.engineSelectionReason?.let { put("strategy_profile_reason", JsonPrimitive(it)) }
                 strategy.engineSelectionKeyScope?.let { put("strategy_profile_key_scope", JsonPrimitive(it)) }
                 strategy.engineSelectionBucket?.let { put("strategy_profile_bucket", JsonPrimitive(it)) }
-                if (strategy.uaSpoofingActive) {
+                if (strategy.uaSpoofingActive && strategy.userAgentOverride != null) {
                     put("ua_spoofing_active", JsonPrimitive(true))
                     strategy.personaProfile?.let { put("persona_profile", JsonPrimitive(it)) }
                 }

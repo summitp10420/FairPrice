@@ -22,3 +22,8 @@ ON CONFLICT (code) DO UPDATE SET
   user_agent = EXCLUDED.user_agent,
   name = EXCLUDED.name,
   is_active = EXCLUDED.is_active;
+
+-- Activate user_agent_profiling tactic (Sprint 14 seeded it with has_active_countermeasure = false).
+UPDATE public.tactic_registry
+SET has_active_countermeasure = true
+WHERE tactic_code = 'user_agent_profiling';

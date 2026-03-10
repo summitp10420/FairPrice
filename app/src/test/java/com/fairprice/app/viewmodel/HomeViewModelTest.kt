@@ -1129,6 +1129,45 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun spoofedExtraction_passesUserAgentOverrideWhenStrategyRequestsIt() = runTest(dispatcher) {
+        val extractionEngine = FakeExtractionEngine(
+            extractionResults = mutableListOf(
+                Result.success(ExtractionResult(priceCents = 2200, tactics = emptyList())),
+                Result.success(ExtractionResult(priceCents = 1800, tactics = emptyList())),
+            ),
+        )
+        val strategyResolver = FakeStrategyResolver(
+            result = Result.success(
+                StrategyResult(
+                    strategyId = null,
+                    strategyCode = "stealth_max",
+                    amnesiaWipeRequired = true,
+                    strictTrackingProtection = true,
+                    canvasSpoofingActive = true,
+                    urlSanitize = true,
+                    uaSpoofingActive = true,
+                    userAgentOverride = "test-ua",
+                    personaProfile = "gecko_control",
+                    wireguardConfig = "",
+                ),
+            ),
+        )
+        val viewModel = HomeViewModel(
+            repository = FakeRepository(),
+            extractionEngine = extractionEngine,
+            strategyResolver = strategyResolver,
+        )
+
+        viewModel.onUrlInputChanged("https://example.com/p/123")
+        viewModel.onCheckPriceClicked()
+        advanceUntilIdle()
+
+        assertEquals(2, extractionEngine.requests.size)
+        val spoofRequest = extractionEngine.requests[1]
+        assertEquals("test-ua", spoofRequest.userAgentOverride)
+    }
+
+    @Test
     fun cleanSessionPreparationFailure_failsClosedWithRetryGuidance() = runTest(dispatcher) {
         val repository = FakeRepository()
         val extractionEngine = FakeExtractionEngine(
