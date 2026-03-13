@@ -8,7 +8,7 @@ app.use(express.json());
 interface StrategyRequest {
   domain: string;
   detected_tactics: string[];
-  anonymous_bucket: number; // 0-99
+  session_id: string;
 }
 
 /** Row from strategy_profiles */
@@ -24,6 +24,8 @@ interface StrategyProfileRow {
     url_sanitize?: boolean;
     ua_spoofing_active?: boolean;
     persona_profile?: string;
+    proxy_routing_active?: boolean;
+    target_income_tier?: string;
   };
 }
 
@@ -35,6 +37,7 @@ interface TacticRegistryEntry {
     canvas_spoofing_active?: boolean;
     url_sanitize?: boolean;
     ua_spoofing_active?: boolean;
+    proxy_routing_active?: boolean;
   };
 }
 
@@ -59,7 +62,7 @@ interface StrategyResponse {
   engineSelectionKeyScope: string;
   engineSelectionBucket: number;
   selection_mode: 'exploit' | 'explore';
-  proxyConfig: null;
+  proxy_config: { host: string; port: number; username: string; password: string; zip_code: string } | null;
 }
 
 /** Row from persona_catalog */
@@ -69,7 +72,24 @@ interface PersonaCatalogRow {
   is_active: boolean;
 }
 
-const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize', 'ua_spoofing_active'] as const;
+/** Row from proxy_location_catalog */
+interface ProxyLocationRow {
+  zip_code: string;
+  metro_area: string;
+  income_tier: string;
+  is_active: boolean;
+}
+
+function computeBucket(domain: string, sessionId: string): number {
+  const key = `${domain}|${sessionId}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 100;
+}
+
+const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize', 'ua_spoofing_active', 'proxy_routing_active'] as const;
 
 /** Fallback when cache is empty (cold boot / Supabase unreachable) - Tier 2 for WAF protection */
 const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
@@ -87,12 +107,13 @@ const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' 
   strategyVersion: '2.0',
   wireguardConfig: '',
   strategy_profile: 'amnesia_standard',
-  proxyConfig: null,
+  proxy_config: null,
 };
 
 let cachedTacticRegistry: Record<string, TacticRegistryEntry> = {};
 let cachedProfiles: StrategyProfileRow[] = [];
 let cachedPersonaCatalog: Record<string, PersonaCatalogRow> = {};
+let cachedProxyLocations: ProxyLocationRow[] = [];
 let supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
@@ -109,7 +130,7 @@ async function refreshDataCaches(): Promise<void> {
   const client = getSupabase();
   if (!client) return;
   try {
-    const [profilesRes, registryRes, personaRes] = await Promise.all([
+    const [profilesRes, registryRes, personaRes, proxyLocRes] = await Promise.all([
       client
         .from('strategy_profiles')
         .select('id, code, name, tier, definition')
@@ -121,6 +142,10 @@ async function refreshDataCaches(): Promise<void> {
       client
         .from('persona_catalog')
         .select('code, user_agent, is_active')
+        .eq('is_active', true),
+      client
+        .from('proxy_location_catalog')
+        .select('zip_code, metro_area, income_tier, is_active')
         .eq('is_active', true),
     ]);
 
@@ -161,6 +186,18 @@ async function refreshDataCaches(): Promise<void> {
     } else {
       console.warn('[FairPrice Brain] persona_catalog fetch failed:', personaRes.error.message);
     }
+
+    if (!proxyLocRes.error) {
+      cachedProxyLocations = (proxyLocRes.data ?? []).map((r: { zip_code: string; metro_area: string; income_tier: string; is_active: boolean }) => ({
+        zip_code: r.zip_code,
+        metro_area: r.metro_area,
+        income_tier: r.income_tier,
+        is_active: r.is_active,
+      }));
+      console.log(`[FairPrice Brain] Cached ${cachedProxyLocations.length} proxy location entries`);
+    } else {
+      console.warn('[FairPrice Brain] proxy_location_catalog fetch failed:', proxyLocRes.error.message);
+    }
   } catch (err) {
     console.warn('[FairPrice Brain] refreshDataCaches error:', err instanceof Error ? err.message : String(err));
   }
@@ -173,6 +210,7 @@ function mergeRequiredCountermeasures(detected_tactics: string[]): Record<string
     canvas_spoofing_active: false,
     url_sanitize: false,
     ua_spoofing_active: false,
+    proxy_routing_active: false,
   };
   for (const tactic of detected_tactics) {
     const entry = cachedTacticRegistry[tactic];
@@ -219,13 +257,14 @@ function buildResponse(
   reason: string,
   bucket: number,
   selectionMode: 'exploit' | 'explore',
+  sessionId: string,
 ): StrategyResponse {
   if (row === null) {
     return {
       ...FALLBACK_AMNESIA_STANDARD,
       engineSelectionPolicy: policy,
       engineSelectionReason: reason,
-      engineSelectionKeyScope: 'domain+anonymous_bucket',
+      engineSelectionKeyScope: 'domain+session',
       engineSelectionBucket: bucket,
       selection_mode: selectionMode,
     };
@@ -236,6 +275,31 @@ function buildResponse(
   const userAgentOverride = uaSpoofingActive && personaProfile
     ? resolveUserAgentOverride(personaProfile)
     : null;
+
+  const proxyRoutingActive = def.proxy_routing_active ?? false;
+  const targetTier = def.target_income_tier ?? 'low';
+  let proxyConfig: { host: string; port: number; username: string; password: string; zip_code: string } | null = null;
+
+  if (proxyRoutingActive && cachedProxyLocations.length > 0) {
+    const availableZips = cachedProxyLocations.filter((loc) => loc.income_tier === targetTier);
+    const pool = availableZips.length > 0 ? availableZips : cachedProxyLocations;
+    const selectedZip = pool[bucket % pool.length].zip_code;
+
+    const proxyHost = process.env.PROXY_HOST || 'pr.oxylabs.io';
+    const proxyPort = parseInt(process.env.PROXY_PORT || '7777', 10);
+    const baseUser = process.env.PROXY_USER || 'customer-fairprice';
+    const proxyPass = process.env.PROXY_PASS || 'placeholder_pass';
+    const magicUsername = `${baseUser}-cc-us-zip-${selectedZip}-sess-${sessionId}`;
+
+    proxyConfig = {
+      host: proxyHost,
+      port: proxyPort,
+      username: magicUsername,
+      password: proxyPass,
+      zip_code: selectedZip,
+    };
+  }
+
   return {
     strategy_id: row.id,
     strategy_code: row.code,
@@ -253,10 +317,10 @@ function buildResponse(
     strategy_profile: row.code,
     engineSelectionPolicy: policy,
     engineSelectionReason: reason,
-    engineSelectionKeyScope: 'domain+anonymous_bucket',
+    engineSelectionKeyScope: 'domain+session',
     engineSelectionBucket: bucket,
     selection_mode: selectionMode,
-    proxyConfig: null,
+    proxy_config: proxyConfig,
   };
 }
 
@@ -267,12 +331,11 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
   const detected_tactics = Array.isArray(body?.detected_tactics)
     ? body.detected_tactics.map((t) => String(t))
     : [];
-  const anonymous_bucket = typeof body?.anonymous_bucket === 'number'
-    ? Math.floor(Math.max(0, Math.min(99, body.anonymous_bucket)))
-    : 0;
+  const sessionId = typeof body?.session_id === 'string' && body.session_id.trim() ? body.session_id.trim() : 'default';
+  const anonymous_bucket = computeBucket(domain, sessionId);
 
   let policy = 'railway_tiered_v1_epsilon_greedy_exploit';
-  let reason = `bucket=${anonymous_bucket} domain=${domain}`;
+  let reason = `bucket=${anonymous_bucket} domain=${domain} session=${sessionId}`;
   let selectionMode: 'exploit' | 'explore' = 'exploit';
   let row: StrategyProfileRow | null = null;
 
@@ -301,7 +364,7 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
     }
   }
 
-  const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode);
+  const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode, sessionId);
   res.status(200).json(response);
 });
 

@@ -1308,6 +1308,7 @@ class HomeViewModelTest {
         override suspend fun resolveStrategy(
             url: String,
             baselineTactics: List<String>,
+            shoppingSessionId: String,
         ): Result<StrategyResult> {
             resolveCalls += 1
             lastUrl = url

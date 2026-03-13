@@ -114,11 +114,19 @@ class TelemetryAssembler {
         strategy: StrategyResult? = null,
         strategyProfile: String? = null,
         engineSelectionSource: String? = null,
+        shoppingSessionId: String? = null,
+        proxyZip: String? = null,
+        proxyRoutingActive: Boolean = false,
     ): JsonObject {
         return buildJsonObject {
             put("url_sanitized", JsonPrimitive(urlSanitized))
             if (amnesiaProtocol != null) put("amnesia_protocol", JsonPrimitive(amnesiaProtocol))
             if (trackingProtection != null) put("tracking_protection", JsonPrimitive(trackingProtection))
+            shoppingSessionId?.let { put("shopping_session_id", JsonPrimitive(it)) }
+            if (proxyRoutingActive) {
+                put("proxy_routing_active", JsonPrimitive(true))
+                proxyZip?.let { put("proxy_zip", JsonPrimitive(it)) }
+            }
             if (strategy != null) {
                 strategy.strategyId?.let { put("strategy_id", JsonPrimitive(it)) }
                 put("strategy_code", JsonPrimitive(strategy.effectiveStrategyCode()))

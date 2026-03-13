@@ -4,15 +4,23 @@ import java.net.URI
 import java.util.Locale
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonObject
 
 /**
  * Strategy resolution interface. The app depends on this abstraction.
  * The strategy engine lives on Railway; implementations may call Railway or use a local fallback.
  * See DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD.
  */
+@Serializable
+data class ProxyConfig(
+    val host: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+    @SerialName("zip_code") val zipCode: String,
+)
+
 interface StrategyResolver {
-    suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult>
+    suspend fun resolveStrategy(url: String, baselineTactics: List<String>, shoppingSessionId: String): Result<StrategyResult>
 }
 
 @Serializable
@@ -41,14 +49,14 @@ data class StrategyResult(
     val userAgentOverride: String? = null,
     @SerialName("persona_profile")
     val personaProfile: String? = null,
+    @SerialName("proxy_config")
+    val proxyConfig: ProxyConfig? = null,
     val engineSelectionPolicy: String? = null,
     val engineSelectionReason: String? = null,
     val engineSelectionKeyScope: String? = null,
     val engineSelectionBucket: Int? = null,
     @SerialName("selection_mode")
     val selectionMode: String? = null,
-    /** Reserved for Sprint 14 residential proxies. */
-    val proxyConfig: JsonObject? = null,
 ) {
     /** Effective profile code: from strategy_code or, for old payloads, strategy_profile. */
     fun effectiveStrategyCode(): String =
@@ -80,17 +88,13 @@ data class StrategyResult(
  * Always returns clean_baseline (least aggressive, clean session only).
  * Not an engine — it provides a strategy so the spoof run can proceed.
  */
-class LocalStrategyFallback(
-    private val installationIdProvider: () -> String = { DEFAULT_INSTALLATION_ID },
-) : StrategyResolver {
+class LocalStrategyFallback : StrategyResolver {
     companion object {
-        private const val DEFAULT_INSTALLATION_ID = "default_installation"
         private const val ENGINE_SELECTION_POLICY = "local_fallback_clean_baseline"
     }
 
-    override suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
+    override suspend fun resolveStrategy(url: String, baselineTactics: List<String>, shoppingSessionId: String): Result<StrategyResult> {
         val domain = normalizeDomain(url)
-        val installationId = installationIdProvider().ifBlank { DEFAULT_INSTALLATION_ID }
         return Result.success(
             StrategyResult(
                 strategyId = null,
@@ -102,8 +106,8 @@ class LocalStrategyFallback(
                 wireguardConfig = "",
                 strategyProfile = StrategyProfileBehavior.CLEAN_BASELINE,
                 engineSelectionPolicy = ENGINE_SELECTION_POLICY,
-                engineSelectionReason = "domain=$domain installation=$installationId",
-                engineSelectionKeyScope = "domain+installation",
+                engineSelectionReason = "domain=$domain session=$shoppingSessionId",
+                engineSelectionKeyScope = "domain+session",
                 engineSelectionBucket = null,
             ),
         )

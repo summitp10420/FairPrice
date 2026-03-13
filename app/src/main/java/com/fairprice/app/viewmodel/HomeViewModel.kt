@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 import org.mozilla.geckoview.GeckoSession
 
 sealed interface HomeProcessState {
@@ -69,6 +70,7 @@ data class HomeUiState(
     val showBrowser: Boolean = false,
     val isAdmin: Boolean = false,
     val adminEngineOverride: EngineOverride = EngineOverride.AUTO,
+    val shoppingSessionId: String? = null,
 )
 
 class HomeViewModel(
@@ -183,11 +185,13 @@ class HomeViewModel(
     fun onCheckPriceClicked() {
         val rawSubmittedUrl = _uiState.value.urlInput.trim()
         val dirtyBaselinePriceCents = parseDirtyBaselineCents(_uiState.value.dirtyBaselineInputRaw)
+        val newSessionId = UUID.randomUUID().toString()
         _uiState.update { current ->
             current.copy(
                 lastSubmittedUrl = rawSubmittedUrl,
                 processState = HomeProcessState.Idle,
                 showBrowser = false,
+                shoppingSessionId = newSessionId,
             )
         }
         if (rawSubmittedUrl.isBlank()) return
@@ -197,6 +201,7 @@ class HomeViewModel(
                 dirtyBaselinePriceCents = dirtyBaselinePriceCents,
                 adminEngineOverride = _uiState.value.adminEngineOverride,
                 isAdmin = _uiState.value.isAdmin,
+                shoppingSessionId = newSessionId,
             ),
         )
     }
@@ -217,6 +222,7 @@ class HomeViewModel(
                 dirtyBaselineInputRaw = "",
                 lastSubmittedUrl = null,
                 showBrowser = false,
+                shoppingSessionId = null,
             )
         }
     }

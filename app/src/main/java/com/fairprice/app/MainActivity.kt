@@ -26,24 +26,20 @@ import com.fairprice.app.ui.HomeScreen
 import com.fairprice.app.ui.theme.FairPriceTheme
 import com.fairprice.app.viewmodel.HomeViewModel
 import java.util.Locale
-import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val SHADOW_CLEAN_CONTROL_SAMPLE_PERCENT = 20
-        private const val INSTALLATION_PREFS = "fairprice_engine_assignment"
-        private const val INSTALLATION_ID_KEY = "installation_id"
     }
 
     private val repository: FairPriceRepository by lazy {
         FairPriceRepositoryImpl(SupabaseClientProvider.client)
     }
     private val extractionEngine by lazy { GeckoExtractionEngine(applicationContext) }
-    private val installationId: String by lazy { getOrCreateInstallationId() }
     private val httpClient by lazy { HttpClient(OkHttp) }
     private val strategyResolver by lazy {
-        val localFallback = LocalStrategyFallback(installationIdProvider = { installationId })
+        val localFallback = LocalStrategyFallback()
         val endpoint = BuildConfig.RAILWAY_STRATEGY_ENDPOINT
         Log.i(TAG, "Strategy resolver init: RAILWAY_STRATEGY_ENDPOINT=${if (endpoint.isNotBlank()) endpoint else "(empty)"}")
         if (endpoint.isNotBlank()) {
@@ -52,7 +48,6 @@ class MainActivity : ComponentActivity() {
                 httpClient = httpClient,
                 railwayEndpoint = endpoint,
                 localFallback = localFallback,
-                installationIdProvider = { installationId },
             )
         } else {
             Log.i(TAG, "Using LocalStrategyFallback (no Railway endpoint)")
@@ -133,14 +128,5 @@ class MainActivity : ComponentActivity() {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
             homeViewModel.onSharedTextReceived(sharedText)
         }
-    }
-
-    private fun getOrCreateInstallationId(): String {
-        val prefs = getSharedPreferences(INSTALLATION_PREFS, MODE_PRIVATE)
-        val existing = prefs.getString(INSTALLATION_ID_KEY, null)?.trim()
-        if (!existing.isNullOrBlank()) return existing
-        val generated = UUID.randomUUID().toString()
-        prefs.edit().putString(INSTALLATION_ID_KEY, generated).apply()
-        return generated
     }
 }

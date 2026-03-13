@@ -42,6 +42,8 @@ data class ExtractionRequest(
     val phase: String = "default",
     val strictTrackingProtection: Boolean = false,
     val userAgentOverride: String? = null,
+    /** Phase 3b will use this for CONFIGURE_PROXY; plumbing only in Phase 3a. */
+    val proxyConfig: ProxyConfig? = null,
 )
 
 class CleanSessionPreparationException(message: String, cause: Throwable? = null) :

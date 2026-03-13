@@ -8,25 +8,26 @@ import org.junit.Test
 
 class LocalStrategyFallbackTest {
     @Test
-    fun sameDomainAndInstallation_isStableAcrossCalls() = runTest {
-        val fallback = LocalStrategyFallback(installationIdProvider = { "install-alpha" })
+    fun sameDomainAndSession_isStableAcrossCalls() = runTest {
+        val fallback = LocalStrategyFallback()
+        val sessionId = "test-session-id"
 
-        val first = fallback.resolveStrategy("https://www.example.com/p/1", baselineTactics = emptyList()).getOrThrow()
-        val second = fallback.resolveStrategy("https://example.com/p/2", baselineTactics = emptyList()).getOrThrow()
+        val first = fallback.resolveStrategy("https://www.example.com/p/1", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
+        val second = fallback.resolveStrategy("https://example.com/p/2", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
 
         assertEquals("clean_baseline", first.effectiveStrategyCode())
         assertEquals("clean_baseline", second.effectiveStrategyCode())
         assertEquals("local_fallback_clean_baseline", first.engineSelectionPolicy)
-        assertEquals("domain+installation", first.engineSelectionKeyScope)
+        assertEquals("domain+session", first.engineSelectionKeyScope)
     }
 
     @Test
-    fun alwaysReturnsCleanBaseline_regardlessOfDomainOrInstallation() = runTest {
-        val fallbackA = LocalStrategyFallback(installationIdProvider = { "install-A" })
-        val fallbackB = LocalStrategyFallback(installationIdProvider = { "install-B" })
+    fun alwaysReturnsCleanBaseline_includesSessionInReason() = runTest {
+        val fallback = LocalStrategyFallback()
+        val sessionId = "test-session-id"
 
-        val resultA = fallbackA.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList()).getOrThrow()
-        val resultB = fallbackB.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList()).getOrThrow()
+        val resultA = fallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
+        val resultB = fallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList(), shoppingSessionId = "other-session").getOrThrow()
 
         assertEquals("clean_baseline", resultA.effectiveStrategyCode())
         assertEquals("clean_baseline", resultB.effectiveStrategyCode())
@@ -35,7 +36,10 @@ class LocalStrategyFallbackTest {
         assertFalse(resultA.canvasSpoofingActive)
         assertFalse(resultA.urlSanitize)
         assertTrue(resultA.engineSelectionReason?.contains("domain=walmart.com") == true)
+        assertTrue(resultA.engineSelectionReason?.contains("session=$sessionId") == true)
         assertTrue(resultB.engineSelectionReason?.contains("domain=walmart.com") == true)
+        assertEquals("domain+session", resultA.engineSelectionKeyScope)
+        assertEquals("domain+session", resultB.engineSelectionKeyScope)
     }
 
     @Test

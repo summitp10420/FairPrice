@@ -20,4 +20,5 @@ data class StartPriceCheckParams(
     val dirtyBaselinePriceCents: Int?,
     val adminEngineOverride: EngineOverride,
     val isAdmin: Boolean,
+    val shoppingSessionId: String,
 )

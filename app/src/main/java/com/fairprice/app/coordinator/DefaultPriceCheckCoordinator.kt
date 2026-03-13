@@ -109,6 +109,7 @@ class DefaultPriceCheckCoordinator(
                             strategyResolver.resolveStrategy(
                                 url = submittedUrl,
                                 baselineTactics = preSpoof.tacticSourceExtraction.tactics,
+                                shoppingSessionId = params.shoppingSessionId,
                             ).getOrElse { throwable ->
                                 terminalError = "Strategy resolution failed: ${throwable.toUserMessage()}"
                                 val diagnostics = preSpoof.diagnostics.toMutableList().apply { add(terminalError.orEmpty()) }
@@ -162,6 +163,7 @@ class DefaultPriceCheckCoordinator(
                             engineSelectionSource = selectionSource,
                             spoofExecutionUrl = spoofUrlPlan.url,
                             spoofUrlSanitized = spoofUrlPlan.wasSanitized,
+                            shoppingSessionId = params.shoppingSessionId,
                             attemptRows = preSpoof.attemptRows,
                             diagnostics = preSpoof.diagnostics,
                             onProcessing = ::emitProcessing,
