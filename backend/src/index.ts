@@ -4,6 +4,16 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const app = express();
 app.use(express.json());
 
+// --- GOD MODE LOGGER: INCOMING REQUESTS ---
+app.use((req, res, next) => {
+  if (req.url.includes('/api/v1/strategy')) {
+    console.log(`\n======================================================`);
+    console.log(`[🔥 INCOMING REQUEST] ${req.method} ${req.url}`);
+    console.log(`[📦 PAYLOAD IN]`, JSON.stringify(req.body, null, 2));
+  }
+  next();
+});
+
 /** Inbound payload from Android client */
 interface StrategyRequest {
   domain: string;
@@ -158,8 +168,6 @@ async function refreshDataCaches(): Promise<void> {
         definition: (row.definition as StrategyProfileRow['definition']) ?? {},
       }));
       console.log(`[FairPrice Brain] Cached ${cachedProfiles.length} strategy profiles`);
-    } else {
-      console.warn('[FairPrice Brain] strategy_profiles fetch failed:', profilesRes.error.message);
     }
 
     if (!registryRes.error) {
@@ -171,8 +179,6 @@ async function refreshDataCaches(): Promise<void> {
       }
       cachedTacticRegistry = lookup;
       console.log(`[FairPrice Brain] Cached ${Object.keys(cachedTacticRegistry).length} tactic registry entries`);
-    } else {
-      console.warn('[FairPrice Brain] tactic_registry fetch failed:', registryRes.error.message);
     }
 
     if (!personaRes.error) {
@@ -183,8 +189,6 @@ async function refreshDataCaches(): Promise<void> {
       }
       cachedPersonaCatalog = lookup;
       console.log(`[FairPrice Brain] Cached ${Object.keys(cachedPersonaCatalog).length} persona catalog entries`);
-    } else {
-      console.warn('[FairPrice Brain] persona_catalog fetch failed:', personaRes.error.message);
     }
 
     if (!proxyLocRes.error) {
@@ -195,8 +199,6 @@ async function refreshDataCaches(): Promise<void> {
         is_active: r.is_active,
       }));
       console.log(`[FairPrice Brain] Cached ${cachedProxyLocations.length} proxy location entries`);
-    } else {
-      console.warn('[FairPrice Brain] proxy_location_catalog fetch failed:', proxyLocRes.error.message);
     }
   } catch (err) {
     console.warn('[FairPrice Brain] refreshDataCaches error:', err instanceof Error ? err.message : String(err));
@@ -269,6 +271,7 @@ function buildResponse(
       selection_mode: selectionMode,
     };
   }
+  
   const def = row.definition ?? {};
   const uaSpoofingActive = def.ua_spoofing_active ?? false;
   const personaProfile = def.persona_profile ?? null;
@@ -277,12 +280,21 @@ function buildResponse(
     : null;
 
   const proxyRoutingActive = def.proxy_routing_active ?? false;
-  const targetTier = def.target_income_tier ?? 'low';
+  
+  // FIXED ZIP ROTATION LOGIC: Replaced hardcoded 'low' fallback with null check
+  const targetTier = def.target_income_tier ?? null;
   let proxyConfig: { host: string; port: number; username: string; password: string; zip_code: string } | null = null;
 
   if (proxyRoutingActive && cachedProxyLocations.length > 0) {
-    const availableZips = cachedProxyLocations.filter((loc) => loc.income_tier === targetTier);
+    // If a tier is specified, filter for it. If not, use the whole catalog.
+    const availableZips = targetTier 
+      ? cachedProxyLocations.filter((loc) => loc.income_tier === targetTier)
+      : cachedProxyLocations;
+      
+    // Fallback to full pool if the filtered pool is empty somehow
     const pool = availableZips.length > 0 ? availableZips : cachedProxyLocations;
+    
+    // Rotate deterministically based on bucket math
     const selectedZip = pool[bucket % pool.length].zip_code;
 
     const proxyHost = process.env.PROXY_HOST || 'pr.oxylabs.io';
@@ -326,13 +338,23 @@ function buildResponse(
 
 /** Fully synchronous - zero DB calls on critical path */
 app.post('/api/v1/strategy', (req: Request, res: Response) => {
+  console.log(`\n================= [ 🚀 NEW PRICE CHECK ] =================`);
   const body = req.body as StrategyRequest;
+
+  // 1. LOG INPUTS
+  console.log(`[📦 INPUT] Domain: ${body?.domain} | Session: ${body?.session_id}`);
+  console.log(`[📦 INPUT] Tactics Detected:`, body?.detected_tactics && body.detected_tactics.length > 0 ? body.detected_tactics : 'None');
+
   const domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
   const detected_tactics = Array.isArray(body?.detected_tactics)
     ? body.detected_tactics.map((t) => String(t))
     : [];
   const sessionId = typeof body?.session_id === 'string' && body.session_id.trim() ? body.session_id.trim() : 'default';
+  
   const anonymous_bucket = computeBucket(domain, sessionId);
+
+  // 2. LOG MATH
+  console.log(`[🧠 MATH] Calculated Bucket: ${anonymous_bucket} (Determines Explore vs Exploit)`);
 
   let policy = 'railway_tiered_v1_epsilon_greedy_exploit';
   let reason = `bucket=${anonymous_bucket} domain=${domain} session=${sessionId}`;
@@ -343,28 +365,49 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
     row = null;
     policy = 'railway_tiered_v1_cold_boot_fallback';
     reason += ' cache_empty=amnesia_standard';
+    console.log(`[⚠️ WARNING] Cache is empty! Falling back to Amnesia Standard.`);
   } else {
     const isExplore = anonymous_bucket >= 75;
+    
+    // 3. LOG DECISIONS
     if (isExplore) {
       selectionMode = 'explore';
       policy = 'railway_tiered_v1_epsilon_greedy_explore';
       const randomTier = anonymous_bucket % 4;
       row = selectProfileByTier(randomTier);
       reason += ` explore_tier=${randomTier}`;
+      console.log(`[🎲 DECISION] Mode: EXPLORE | Randomly selected Tier: ${randomTier}`);
     } else {
       selectionMode = 'exploit';
       const required = mergeRequiredCountermeasures(detected_tactics);
+      console.log(`[⚖️ DECISION] Mode: EXPLOIT | Calculated Countermeasures:`, JSON.stringify(required));
+      
       row = selectLowestQualifyingProfile(required);
       if (row) {
         reason += ` tactics=[${detected_tactics.join(',')}] tier=${row.tier}`;
+        console.log(`[🎯 DECISION] Lowest qualifying profile found: Tier ${row.tier} (${row.code})`);
       } else {
         row = selectProfileByTier(0);
         reason += ` no_qualify fallback_tier_0`;
+        console.log(`[⚠️ DECISION] No qualifying profile found! Falling back to Tier 0.`);
       }
     }
   }
 
   const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode, sessionId);
+  
+  // 4. LOG OUTPUTS
+  console.log(`[✅ OUTPUT] Final Strategy Deployed: ${response.strategy_code}`);
+  
+  if (response.proxy_config) {
+    console.log(`[🌐 PROXY] Routing is ACTIVE`);
+    console.log(`[🌐 PROXY] Target ZIP: ${response.proxy_config.zip_code}`);
+    console.log(`[🌐 PROXY] Exact Username String: "${response.proxy_config.username}"`);
+  } else {
+    console.log(`[🛡️ PROXY] Routing is INACTIVE (Using Clear-Net)`);
+  }
+  
+  console.log(`==========================================================\n`);
   res.status(200).json(response);
 });
 
