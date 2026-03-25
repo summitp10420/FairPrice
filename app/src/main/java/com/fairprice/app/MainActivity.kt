@@ -99,7 +99,6 @@ class MainActivity : ComponentActivity() {
                             onDirtyBaselineChanged = homeViewModel::onDirtyBaselineInputChanged,
                             onUrlChanged = homeViewModel::onUrlInputChanged,
                             onCheckPriceClicked = homeViewModel::onCheckPriceClicked,
-                            onAdminEngineOverrideChanged = homeViewModel::onEngineOverrideChanged,
                             onEnterShoppingMode = homeViewModel::onEnterShoppingMode,
                             onBackToApp = homeViewModel::onBackToApp,
                             onCloseShoppingSession = homeViewModel::onCloseShoppingSession,

@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.input.KeyboardType
-import com.fairprice.app.viewmodel.EngineOverride
 import com.fairprice.app.viewmodel.HomeProcessState
 import com.fairprice.app.viewmodel.HomeUiState
 import kotlin.math.roundToInt
@@ -51,7 +50,6 @@ fun HomeScreen(
     onDirtyBaselineChanged: (String) -> Unit,
     onUrlChanged: (String) -> Unit,
     onCheckPriceClicked: () -> Unit,
-    onAdminEngineOverrideChanged: (EngineOverride) -> Unit,
     onEnterShoppingMode: () -> Unit,
     onBackToApp: () -> Unit,
     onCloseShoppingSession: () -> Unit,
@@ -107,62 +105,7 @@ fun HomeScreen(
                 onClick = onCloseShoppingSession,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Done")
-            }
-            if (uiState.isAdmin) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Admin Engine Override",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.AUTO) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.AUTO,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Auto")
-                    }
-                    OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_CLEAN_BASELINE) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_CLEAN_BASELINE,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("T0")
-                    }
-                    OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_SHIELD_BASIC) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_SHIELD_BASIC,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("T1")
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_AMNESIA_STANDARD) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_AMNESIA_STANDARD,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("T2")
-                    }
-                    OutlinedButton(
-                        onClick = { onAdminEngineOverrideChanged(EngineOverride.FORCE_STEALTH_MAX) },
-                        enabled = uiState.adminEngineOverride != EngineOverride.FORCE_STEALTH_MAX,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("T3")
-                    }
-                }
+                Text("Clear")
             }
             when (val processState = uiState.processState) {
                 is HomeProcessState.Idle -> Unit
@@ -251,12 +194,14 @@ fun HomeScreen(
             AndroidView(
                 factory = { context ->
                     GeckoView(context).apply {
-                        isFocusable = false
-                        isFocusableInTouchMode = false
+                        isFocusable = true
+                        isFocusableInTouchMode = true
                     }
                 },
                 update = { view ->
                     view.setSession(session)
+                    view.isFocusable = uiState.showBrowser
+                    view.isFocusableInTouchMode = uiState.showBrowser
                 },
                 modifier = if (uiState.showBrowser) {
                     Modifier.fillMaxSize().alpha(1f)
