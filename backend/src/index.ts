@@ -301,7 +301,8 @@ function buildResponse(
     const proxyPort = parseInt(process.env.PROXY_PORT || '7777', 10);
     const baseUser = process.env.PROXY_USER || 'customer-fairprice';
     const proxyPass = process.env.PROXY_PASS || 'placeholder_pass';
-    const magicUsername = `${baseUser}-cc-us-zip-${selectedZip}-sess-${sessionId}`;
+    const cleanSessionId = sessionId.replace(/-/g, '');
+    const magicUsername = `${baseUser}-cc-us-zip-${selectedZip}-sess-${cleanSessionId}`;
 
     proxyConfig = {
       host: proxyHost,
