@@ -21,13 +21,11 @@ class RailwayStrategyClient(
     private val httpClient: HttpClient,
     private val railwayEndpoint: String,
     private val localFallback: StrategyResolver,
-    private val installationIdProvider: () -> String,
 ) : StrategyResolver {
 
     companion object {
         private const val TAG = "RailwayStrategyClient"
         private const val NETWORK_TIMEOUT_MS = 3000L
-        private const val BUCKET_MODULUS = 100
         private val json = Json { ignoreUnknownKeys = true }
     }
 
@@ -35,26 +33,24 @@ class RailwayStrategyClient(
     private data class StrategyRequestPayload(
         val domain: String,
         val detected_tactics: List<String>,
-        val anonymous_bucket: Int,
+        val session_id: String,
     )
 
-    override suspend fun resolveStrategy(url: String, baselineTactics: List<String>): Result<StrategyResult> {
+    override suspend fun resolveStrategy(url: String, baselineTactics: List<String>, shoppingSessionId: String): Result<StrategyResult> {
         val domain = normalizeDomain(url)
-        val assignmentKey = "$domain|${installationIdProvider()}"
-        val anonymousBucket = (assignmentKey.hashCode() and Int.MAX_VALUE) % BUCKET_MODULUS
 
         if (railwayEndpoint.isBlank()) {
             Log.i(TAG, "Railway endpoint not configured, using local fallback")
-            return localFallback.resolveStrategy(url, baselineTactics)
+            return localFallback.resolveStrategy(url, baselineTactics, shoppingSessionId)
         }
 
         return runCatching {
             withTimeout(NETWORK_TIMEOUT_MS) {
-                Log.i(TAG, "Requesting strategy from Railway for domain: $domain (bucket: $anonymousBucket)")
+                Log.i(TAG, "Requesting strategy from Railway for domain: $domain (session: $shoppingSessionId)")
                 val payload = StrategyRequestPayload(
                     domain = domain,
                     detected_tactics = baselineTactics,
-                    anonymous_bucket = anonymousBucket,
+                    session_id = shoppingSessionId,
                 )
                 val response = httpClient.post(railwayEndpoint) {
                     contentType(ContentType.Application.Json)
@@ -67,7 +63,7 @@ class RailwayStrategyClient(
             }
         }.recoverCatching { throwable ->
             Log.w(TAG, "Railway unreachable or timed out, falling back to local", throwable)
-            localFallback.resolveStrategy(url, baselineTactics).getOrThrow()
+            localFallback.resolveStrategy(url, baselineTactics, shoppingSessionId).getOrThrow()
         }
     }
 

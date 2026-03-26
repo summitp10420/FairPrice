@@ -1,68 +1,50 @@
 # FairPrice Context Dump for New Chat
 
-**Branch:** `main` (Phase 12 merged)  
-**Last Updated:** 2026-03-05  
+**Branch:** `main` (Sprint 14 merged)  
+**Last Updated:** 2026-03-06  
 **Purpose:** Copy-paste this into a new chat to bootstrap context quickly.
 
 ---
 
 ## Project Overview
 
-**FairPrice** is an Android app that defeats dynamic/personalized pricing by running multi-stage price extraction and comparing baseline vs spoofed prices. Currently runs on **clear-net** (VPN removed in Phase 12). Telemetry is logged to Supabase.
+**FairPrice** is an Android app that defeats dynamic/personalized pricing by running multi-stage price extraction and comparing baseline vs spoofed prices. Runs on **clear-net** (VPN removed in Phase 12). Telemetry is logged to Supabase. The strategy engine runs on Railway and uses a tactic registry + tiered profiles.
 
-**Tech Stack:** Kotlin, Jetpack Compose, MVVM, GeckoView (no WebView), Supabase. Future: Railway for strategy/config logic, Vercel for analytics dashboard.
+**Tech Stack:** Kotlin, Jetpack Compose, MVVM, GeckoView (no WebView), Supabase, Railway (strategy engine). Future: Vercel for analytics dashboard.
 
 ---
 
-## Architecture (Post Phase 12)
+## Architecture (Sprint 14)
 
 ### Entry & Composition
 
 - **MainActivity** – Creates `repository`, `extractionEngine`, `strategyResolver`, `homeViewModel`. Wires Compose UI. Handles `ACTION_SEND` for shared URLs.
-- **HomeViewModel** – Holds `HomeUiState`, builds `DefaultPriceCheckCoordinator` (with `PreSpoofStageRunner`, `SpoofAttemptRunner`, `TelemetryAssembler`), forwards user actions. Exposes `uiState` via `StateFlow`.
+- **HomeViewModel** – Holds `HomeUiState` (includes `adminEngineOverride`), builds `DefaultPriceCheckCoordinator`, forwards user actions. Exposes `uiState` via `StateFlow`.
 
 ### Coordinator Pipeline
 
-- **PriceCheckCoordinator** (interface) – `state`, `startPriceCheck`, `onEnterShoppingMode`, `onBackToApp`, `onCloseShoppingSession`, `onAppClosing`.
-- **DefaultPriceCheckCoordinator** – Runs flow: canonicalize URL → `preSpoofStageRunner.run` → `spoofAttemptRunner.execute` → log telemetry → update state.
-- **PreSpoofStageRunner** – Sniffer pass → (if fail/WAF) clean-control fallback → (if sniffer succeeds, 20% sample) shadow clean-control. Returns `Success` or `TerminalFailure`.
-- **SpoofAttemptRunner** – Up to 2 clear-net spoof attempts via `extractionEngine.loadAndExtract`. Uses `"clear_net"` for telemetry; handles WAF blocks; measures latency and passes into telemetry.
+- **PriceCheckCoordinator** – `state`, `startPriceCheck`, `onEnterShoppingMode`, etc.
+- **DefaultPriceCheckCoordinator** – Canonicalize URL → `preSpoofStageRunner.run` → `strategyResolver.resolveStrategy` → `resolveActiveStrategy` (admin override) → `spoofAttemptRunner.execute` → log telemetry.
+- **PreSpoofStageRunner** – Sniffer → (if fail/WAF) clean-control fallback → (20% sample) shadow clean-control.
+- **SpoofAttemptRunner** – Up to 2 clear-net spoof attempts; passes `selection_mode` into telemetry.
 
-### Engines
+### Backend Strategy Engine (Railway)
 
-- **ExtractionEngine** – GeckoView WebExtension; `loadAndExtract(url, ExtractionRequest)` → `Result<ExtractionResult>`.
-- **StrategyResolver** – Returns `StrategyResult` for `(url, baselineTactics)`. The strategy engine lives on Railway; the app uses `RailwayStrategyClient` (calls Railway) and `LocalStrategyFallback` (when Railway unreachable). See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
+- **In-memory cache:** `strategy_profiles` and `tactic_registry` from Supabase; 60s background refresh. Zero DB calls on critical path.
+- **Profile selection:** Merge `required_countermeasures` from detected tactics → select lowest-tier qualifying profile.
+- **Epsilon-greedy (75/25):** bucket 0–74 = exploit; bucket 75–99 = explore (tier = `bucket % 4`).
+- **Cold-boot fallback:** tier 2 (`amnesia_standard`).
 
-### Telemetry & Utils
+### Admin Engine Override
 
-- **TelemetryAssembler** – Builds `PriceCheck`, `PriceCheckAttempt`, `SummaryData`. Uses `CLEAR_NET` / `CLEAR_NET_DISPLAY` for config-related values.
-- **EngineBootstrapUtils** – Shared: `appendEngineBootstrapToken`, `ExtractionResult.isWafBlockDetected()`. Strategy profile is an open string from the backend; behavior mapping in `StrategyProfileBehavior`.
+- When `isAdmin`, admins can force a profile: AUTO, T0 (`clean_baseline`), T1 (`shield_basic`), T2 (`amnesia_standard`), T3 (`stealth_max`).
+- `resolveActiveStrategy` in coordinator overrides engine result when a non-AUTO override is selected.
 
-### Data Flow Summary
+### Engines & Telemetry
 
-```
-URL share/paste → HomeViewModel.startPriceCheck
-  → DefaultPriceCheckCoordinator.startPriceCheck
-    → PreSpoofStageRunner (sniffer → optional clean-control fallback/shadow)
-    → StrategyResolver.resolveStrategy
-    → SpoofAttemptRunner (clear-net loadAndExtract up to 2 attempts)
-    → FairPriceRepository.logPriceCheckRun
-  → state update → HomeScreen
-```
-
----
-
-## Key Paths
-
-| Area | Path |
-|------|------|
-| Coordinators & runners | `app/src/main/java/com/fairprice/app/coordinator/` |
-| Strategy & extraction | `app/src/main/java/com/fairprice/app/engine/` |
-| ViewModel | `app/src/main/java/com/fairprice/app/viewmodel/HomeViewModel.kt` |
-| Repository / Supabase | `app/src/main/java/com/fairprice/app/data/FairPriceRepository.kt` |
-| UI | `app/src/main/java/com/fairprice/app/ui/HomeScreen.kt` |
-| Data models | `app/src/main/java/com/fairprice/app/data/models/` |
-| Docs | `DOCS/MASTER_ARCHITECTURE.MD`, `DOCS/STRATEGY_LEVERS.MD`, `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`, `DOCS/SPRINT_13_IMPLEMENTATION_PLAN.MD` |
+- **ExtractionEngine** – GeckoView WebExtension; `loadAndExtract` → `Result<ExtractionResult>`.
+- **StrategyResolver** – `RailwayStrategyClient` + `LocalStrategyFallback`. Returns `StrategyResult` with `selection_mode`, `strategy_profile`, flat levers.
+- **TelemetryAssembler** – Builds `PriceCheck` (including `selectionMode`), `PriceCheckAttempt`, `SummaryData`.
 
 ---
 
@@ -71,31 +53,25 @@ URL share/paste → HomeViewModel.startPriceCheck
 - **Phases:** `sniffer`, `clean_control`, `spoof`
 - **Clean control modes:** `none`, `fallback`, `shadow`
 - **Network:** `clear_net` (telemetry), `"Clear Net"` (display)
-- **URL tokens:** sniffer=`sniffer_intel`, clean-control=`clean_control_intel`, spoof=`yale_smart` or `legacy`
+- **URL tokens:** sniffer=`sniffer_intel`, clean-control=`clean_control_intel`, spoof=`<strategy_profile>` (e.g. `clean_baseline`, `shield_basic`, `amnesia_standard`, `stealth_max`)
+- **Strategy profiles (tiers 0–3):** `clean_baseline`, `shield_basic`, `amnesia_standard`, `stealth_max`
 
 ---
 
-## Known Issues
+## Key Paths
 
-1. **LocalStrategyFallback** (formerly DefaultPricingStrategyEngine) – Tests may fail: implementation uses `UUID.randomUUID()` for assignment key; should use domain+installationId. See `DOCS/SPRINT_13_IMPLEMENTATION_PLAN.MD`.
-2. **Legacy telemetry fields** – `attempted_configs`, `final_config`, `vpn_config` kept in DB models; values are `"clear_net"` or empty for compatibility.
-3. **Legacy code** – `PricingStrategyEngine` / `DefaultPricingStrategyEngine` still in use; refactor to `StrategyResolver` / `LocalStrategyFallback` per Sprint 13 plan.
-
----
-
-## Planned Next Steps
-
-1. Execute `DOCS/SPRINT_13_IMPLEMENTATION_PLAN.MD` Part A (architecture alignment: StrategyResolver, LocalStrategyFallback).
-2. Deploy Railway strategy engine (Part B).
-3. Wire `RailwayStrategyClient` with `LocalStrategyFallback` as fallback.
+| Area | Path |
+|------|------|
+| Coordinators | `app/src/main/java/com/fairprice/app/coordinator/` |
+| Strategy & extraction | `app/src/main/java/com/fairprice/app/engine/` |
+| Backend | `backend/src/index.ts` |
+| Docs | `DOCS/MASTER_ARCHITECTURE.MD`, `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`, `DOCS/STRATEGY_LEVERS.MD`, `DOCS/migrations/sprint14_tactic_registry.sql` |
 
 ---
 
-## Development Rules (from MASTER_ARCHITECTURE.MD)
+## Related Documents
 
-- No deprecated Views; use GeckoView only.
-- Decoupled extraction via WebExtension message bridge.
-- Strategy resolution behind `StrategyResolver`; strategy engine lives on Railway. See `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD`.
-- Multi-pass integrity: sniffer → optional clean-control (fallback/shadow) → spoof.
-- State via `StateFlow`; UI observes flows.
-- Graceful degradation: no blocking on extraction failure.
+- `DOCS/MASTER_ARCHITECTURE.MD` — Full architecture, data flow, DB schema
+- `DOCS/STRATEGY_ENGINE_TERMINOLOGY.MD` — Tiered profiles, tactic registry, selection_mode
+- `DOCS/STRATEGY_LEVERS.MD` — Strategy levers and policy knobs
+- `DOCS/migrations/sprint14_tactic_registry.sql` — Tactic registry, tiered profiles, selection_mode column, strategy_win_rates view

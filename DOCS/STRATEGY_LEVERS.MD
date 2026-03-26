@@ -1,4 +1,4 @@
-Last Updated: 2026-03-05
+Last Updated: 2026-03-06
 Owner: FairPrice product/engineering
 Status: Living document (update every phase)
 
@@ -23,29 +23,35 @@ The goal is to identify which combinations produce consistent savings by retaile
 
 3. Lever Catalog
 
-3.0 Remote Strategy Resolution Lever (Sprint 13)
+3.0 Remote Strategy Resolution Lever (Sprint 13/14)
 What it controls:
 - Where strategy decisions are made (Railway backend).
 - How the app obtains a strategy (RailwayStrategyClient + LocalStrategyFallback).
+- Which profile is selected (tactic-driven vs epsilon-greedy exploration).
 
 Approaches:
-- Railway strategy engine returns StrategyResult from (domain, tactics, anonymous_bucket).
-- App receives, loads, and executes. No decision-making on the client.
+- Railway strategy engine returns StrategyResult from (domain, detected_tactics, anonymous_bucket).
+- Engine uses in-memory cache (strategy_profiles, tactic_registry); 60s background refresh. Zero DB calls on critical path.
+- Tactic-driven (exploit): merge required_countermeasures from tactic_registry → select lowest-tier qualifying profile.
+- Epsilon-greedy (75/25): bucket 0–74 = exploit; bucket 75–99 = explore (deterministic tier = bucket % 4).
+- App receives, loads, executes. Admin override (EngineOverride) can force a specific profile when isAdmin.
 
 Actions:
 - Call Railway POST /api/v1/strategy.
 - On timeout/unreachable: use LocalStrategyFallback.
-- Execute returned strategy (engine profile, URL token, proxy config when available).
+- Execute returned strategy (profile code, flat levers, proxy config when available).
+- Admin: force clean_baseline, shield_basic, amnesia_standard, or stealth_max via override.
 
 Policy knobs:
 - Endpoint URL.
 - Timeout duration.
-- Fallback strategy (e.g., conservative legacy or yale_smart).
+- Fallback strategy (cold-boot: amnesia_standard).
+- Exploration rate (currently 25%).
 
 Key telemetry:
 - Railway call success/failure.
 - Strategy source (railway vs fallback).
-- engineSelectionPolicy, strategy_profile from StrategyResult.
+- engineSelectionPolicy, strategy_profile, selection_mode (exploit/explore) from StrategyResult.
 
 3.1 VPN Config Pool Management Lever [DEPRECATED for clear-net phase]
 What it controls:

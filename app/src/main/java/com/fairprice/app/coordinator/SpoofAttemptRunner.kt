@@ -34,6 +34,7 @@ class SpoofAttemptRunner(
         engineSelectionSource: String,
         spoofExecutionUrl: String,
         spoofUrlSanitized: Boolean,
+        shoppingSessionId: String,
         attemptRows: List<PriceCheckAttempt>,
         diagnostics: List<String>,
         onProcessing: (String) -> Unit,
@@ -59,6 +60,8 @@ class SpoofAttemptRunner(
                         cleanSessionRequired = strategy.amnesiaWipeRequired,
                         phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
                         strictTrackingProtection = strategy.strictTrackingProtection,
+                        userAgentOverride = strategy.userAgentOverride.takeIf { strategy.uaSpoofingActive },
+                        proxyConfig = strategy.proxyConfig,
                     ),
                 )
             }
@@ -84,6 +87,9 @@ class SpoofAttemptRunner(
                                 strategy = strategy,
                                 strategyProfile = strategyProfileForTelemetry,
                                 engineSelectionSource = engineSelectionSource,
+                                shoppingSessionId = shoppingSessionId,
+                                proxyRoutingActive = strategy.proxyConfig != null,
+                                proxyZip = strategy.proxyConfig?.zipCode,
                             ),
                         )
                         mutableDiagnostics += "Spoof attempt blocked by WAF."
@@ -104,6 +110,9 @@ class SpoofAttemptRunner(
                                 strategy = strategy,
                                 strategyProfile = strategyProfileForTelemetry,
                                 engineSelectionSource = engineSelectionSource,
+                                shoppingSessionId = shoppingSessionId,
+                                proxyRoutingActive = strategy.proxyConfig != null,
+                                proxyZip = strategy.proxyConfig?.zipCode,
                             ),
                         )
                         spoofedResult = extracted
@@ -132,6 +141,9 @@ class SpoofAttemptRunner(
                             strategy = strategy,
                             strategyProfile = strategyProfileForTelemetry,
                             engineSelectionSource = engineSelectionSource,
+                            shoppingSessionId = shoppingSessionId,
+                            proxyRoutingActive = strategy.proxyConfig != null,
+                            proxyZip = strategy.proxyConfig?.zipCode,
                         ),
                     )
                     mutableDiagnostics += userMessage

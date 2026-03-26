@@ -2,66 +2,63 @@ package com.fairprice.app.engine
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalStrategyFallbackTest {
     @Test
-    fun sameDomainAndInstallation_isStableAcrossCalls() = runTest {
-        val fallback = LocalStrategyFallback(
-            installationIdProvider = { "install-alpha" },
-            bucketCalculator = { key ->
-                if (key.contains("example.com") && key.contains("install-alpha")) 37 else 62
-            },
-        )
+    fun sameDomainAndSession_isStableAcrossCalls() = runTest {
+        val fallback = LocalStrategyFallback()
+        val sessionId = "test-session-id"
 
-        val first = fallback.resolveStrategy("https://www.example.com/p/1", baselineTactics = emptyList()).getOrThrow()
-        val second = fallback.resolveStrategy("https://example.com/p/2", baselineTactics = emptyList()).getOrThrow()
+        val first = fallback.resolveStrategy("https://www.example.com/p/1", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
+        val second = fallback.resolveStrategy("https://example.com/p/2", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
 
-        assertEquals(first.effectiveStrategyCode(), second.effectiveStrategyCode())
-        assertEquals(37, first.engineSelectionBucket)
-        assertEquals(37, second.engineSelectionBucket)
-        assertEquals("domain_installation_bucket_v1_50_50", first.engineSelectionPolicy)
-        assertEquals("domain+installation", first.engineSelectionKeyScope)
+        assertEquals("clean_baseline", first.effectiveStrategyCode())
+        assertEquals("clean_baseline", second.effectiveStrategyCode())
+        assertEquals("local_fallback_clean_baseline", first.engineSelectionPolicy)
+        assertEquals("domain+session", first.engineSelectionKeyScope)
     }
 
     @Test
-    fun sameDomainDifferentInstallations_canMapToDifferentProfiles() = runTest {
-        val yaleFallback = LocalStrategyFallback(
-            installationIdProvider = { "install-A" },
-            bucketCalculator = { key ->
-                if (key.contains("install-A")) 12 else 88
-            },
-        )
-        val legacyFallback = LocalStrategyFallback(
-            installationIdProvider = { "install-B" },
-            bucketCalculator = { key ->
-                if (key.contains("install-A")) 12 else 88
-            },
-        )
+    fun alwaysReturnsCleanBaseline_includesSessionInReason() = runTest {
+        val fallback = LocalStrategyFallback()
+        val sessionId = "test-session-id"
 
-        val yaleResult = yaleFallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList()).getOrThrow()
-        val legacyResult = legacyFallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList()).getOrThrow()
+        val resultA = fallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList(), shoppingSessionId = sessionId).getOrThrow()
+        val resultB = fallback.resolveStrategy("https://walmart.com/p/123", baselineTactics = emptyList(), shoppingSessionId = "other-session").getOrThrow()
 
-        assertEquals("yale_smart", yaleResult.effectiveStrategyCode())
-        assertEquals("legacy", legacyResult.effectiveStrategyCode())
-        assertNotEquals(yaleResult.engineSelectionBucket, legacyResult.engineSelectionBucket)
-        assertTrue(yaleResult.engineSelectionReason?.contains("domain=walmart.com") == true)
-        assertTrue(legacyResult.engineSelectionReason?.contains("domain=walmart.com") == true)
+        assertEquals("clean_baseline", resultA.effectiveStrategyCode())
+        assertEquals("clean_baseline", resultB.effectiveStrategyCode())
+        assertFalse(resultA.amnesiaWipeRequired)
+        assertFalse(resultA.strictTrackingProtection)
+        assertFalse(resultA.canvasSpoofingActive)
+        assertFalse(resultA.urlSanitize)
+        assertTrue(resultA.engineSelectionReason?.contains("domain=walmart.com") == true)
+        assertTrue(resultA.engineSelectionReason?.contains("session=$sessionId") == true)
+        assertTrue(resultB.engineSelectionReason?.contains("domain=walmart.com") == true)
+        assertEquals("domain+session", resultA.engineSelectionKeyScope)
+        assertEquals("domain+session", resultB.engineSelectionKeyScope)
     }
 
     @Test
     fun normalized_derivesBooleansFromStrategyProfileWhenStrategyCodeBlank() {
-        val legacyOnly = StrategyResult(strategyProfile = "legacy")
-        val normalizedLegacy = legacyOnly.normalized()
-        assertEquals("legacy", normalizedLegacy.effectiveStrategyCode())
-        assertEquals(null, normalizedLegacy.strategyId)
-        assertTrue(!normalizedLegacy.amnesiaWipeRequired && !normalizedLegacy.strictTrackingProtection && !normalizedLegacy.canvasSpoofingActive && !normalizedLegacy.urlSanitize)
+        val cleanBaselineOnly = StrategyResult(strategyProfile = "clean_baseline")
+        val normalizedClean = cleanBaselineOnly.normalized()
+        assertEquals("clean_baseline", normalizedClean.effectiveStrategyCode())
+        assertEquals(null, normalizedClean.strategyId)
+        assertFalse(normalizedClean.amnesiaWipeRequired)
+        assertFalse(normalizedClean.strictTrackingProtection)
+        assertFalse(normalizedClean.canvasSpoofingActive)
+        assertFalse(normalizedClean.urlSanitize)
 
-        val yaleOnly = StrategyResult(strategyProfile = "yale_smart")
-        val normalizedYale = yaleOnly.normalized()
-        assertEquals("yale_smart", normalizedYale.effectiveStrategyCode())
-        assertTrue(normalizedYale.amnesiaWipeRequired && normalizedYale.strictTrackingProtection && normalizedYale.canvasSpoofingActive && normalizedYale.urlSanitize)
+        val stealthMaxOnly = StrategyResult(strategyProfile = "stealth_max")
+        val normalizedStealth = stealthMaxOnly.normalized()
+        assertEquals("stealth_max", normalizedStealth.effectiveStrategyCode())
+        assertTrue(normalizedStealth.amnesiaWipeRequired)
+        assertTrue(normalizedStealth.strictTrackingProtection)
+        assertTrue(normalizedStealth.canvasSpoofingActive)
+        assertTrue(normalizedStealth.urlSanitize)
     }
 }

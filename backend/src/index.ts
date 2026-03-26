@@ -4,11 +4,21 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const app = express();
 app.use(express.json());
 
+// --- GOD MODE LOGGER: INCOMING REQUESTS ---
+app.use((req, res, next) => {
+  if (req.url.includes('/api/v1/strategy')) {
+    console.log(`\n======================================================`);
+    console.log(`[🔥 INCOMING REQUEST] ${req.method} ${req.url}`);
+    console.log(`[📦 PAYLOAD IN]`, JSON.stringify(req.body, null, 2));
+  }
+  next();
+});
+
 /** Inbound payload from Android client */
 interface StrategyRequest {
   domain: string;
   detected_tactics: string[];
-  anonymous_bucket: number; // 0-99
+  session_id: string;
 }
 
 /** Row from strategy_profiles */
@@ -22,6 +32,10 @@ interface StrategyProfileRow {
     strict_tracking_protection?: boolean;
     canvas_spoofing_active?: boolean;
     url_sanitize?: boolean;
+    ua_spoofing_active?: boolean;
+    persona_profile?: string;
+    proxy_routing_active?: boolean;
+    target_income_tier?: string;
   };
 }
 
@@ -32,6 +46,8 @@ interface TacticRegistryEntry {
     strict_tracking_protection?: boolean;
     canvas_spoofing_active?: boolean;
     url_sanitize?: boolean;
+    ua_spoofing_active?: boolean;
+    proxy_routing_active?: boolean;
   };
 }
 
@@ -43,6 +59,9 @@ interface StrategyResponse {
   strict_tracking_protection: boolean;
   canvas_spoofing_active: boolean;
   url_sanitize: boolean;
+  ua_spoofing_active: boolean;
+  user_agent_override: string | null;
+  persona_profile: string | null;
   strategyName: string;
   strategyEngineName: string;
   strategyVersion: string;
@@ -53,10 +72,34 @@ interface StrategyResponse {
   engineSelectionKeyScope: string;
   engineSelectionBucket: number;
   selection_mode: 'exploit' | 'explore';
-  proxyConfig: null;
+  proxy_config: { host: string; port: number; username: string; password: string; zip_code: string } | null;
 }
 
-const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize'] as const;
+/** Row from persona_catalog */
+interface PersonaCatalogRow {
+  code: string;
+  user_agent: string;
+  is_active: boolean;
+}
+
+/** Row from proxy_location_catalog */
+interface ProxyLocationRow {
+  zip_code: string;
+  metro_area: string;
+  income_tier: string;
+  is_active: boolean;
+}
+
+function computeBucket(domain: string, sessionId: string): number {
+  const key = `${domain}|${sessionId}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 100;
+}
+
+const LEVERS = ['amnesia_wipe_required', 'strict_tracking_protection', 'canvas_spoofing_active', 'url_sanitize', 'ua_spoofing_active', 'proxy_routing_active'] as const;
 
 /** Fallback when cache is empty (cold boot / Supabase unreachable) - Tier 2 for WAF protection */
 const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' | 'engineSelectionReason' | 'engineSelectionKeyScope' | 'engineSelectionBucket' | 'selection_mode'> = {
@@ -66,16 +109,21 @@ const FALLBACK_AMNESIA_STANDARD: Omit<StrategyResponse, 'engineSelectionPolicy' 
   strict_tracking_protection: true,
   canvas_spoofing_active: false,
   url_sanitize: true,
+  ua_spoofing_active: false,
+  user_agent_override: null,
+  persona_profile: null,
   strategyName: 'Amnesia Standard',
   strategyEngineName: 'railway_brain_v2.0',
   strategyVersion: '2.0',
   wireguardConfig: '',
   strategy_profile: 'amnesia_standard',
-  proxyConfig: null,
+  proxy_config: null,
 };
 
 let cachedTacticRegistry: Record<string, TacticRegistryEntry> = {};
 let cachedProfiles: StrategyProfileRow[] = [];
+let cachedPersonaCatalog: Record<string, PersonaCatalogRow> = {};
+let cachedProxyLocations: ProxyLocationRow[] = [];
 let supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
@@ -92,7 +140,7 @@ async function refreshDataCaches(): Promise<void> {
   const client = getSupabase();
   if (!client) return;
   try {
-    const [profilesRes, registryRes] = await Promise.all([
+    const [profilesRes, registryRes, personaRes, proxyLocRes] = await Promise.all([
       client
         .from('strategy_profiles')
         .select('id, code, name, tier, definition')
@@ -100,8 +148,15 @@ async function refreshDataCaches(): Promise<void> {
         .order('tier', { ascending: true }),
       client
         .from('tactic_registry')
-        .select('tactic_code, required_countermeasures')
-        .eq('has_active_countermeasure', true),
+        .select('tactic_code, required_countermeasures'),
+      client
+        .from('persona_catalog')
+        .select('code, user_agent, is_active')
+        .eq('is_active', true),
+      client
+        .from('proxy_location_catalog')
+        .select('zip_code, metro_area, income_tier, is_active')
+        .eq('is_active', true),
     ]);
 
     if (!profilesRes.error) {
@@ -113,8 +168,6 @@ async function refreshDataCaches(): Promise<void> {
         definition: (row.definition as StrategyProfileRow['definition']) ?? {},
       }));
       console.log(`[FairPrice Brain] Cached ${cachedProfiles.length} strategy profiles`);
-    } else {
-      console.warn('[FairPrice Brain] strategy_profiles fetch failed:', profilesRes.error.message);
     }
 
     if (!registryRes.error) {
@@ -126,8 +179,26 @@ async function refreshDataCaches(): Promise<void> {
       }
       cachedTacticRegistry = lookup;
       console.log(`[FairPrice Brain] Cached ${Object.keys(cachedTacticRegistry).length} tactic registry entries`);
-    } else {
-      console.warn('[FairPrice Brain] tactic_registry fetch failed:', registryRes.error.message);
+    }
+
+    if (!personaRes.error) {
+      const lookup: Record<string, PersonaCatalogRow> = {};
+      for (const row of personaRes.data ?? []) {
+        const r = row as { code: string; user_agent: string; is_active: boolean };
+        lookup[r.code] = { code: r.code, user_agent: r.user_agent, is_active: r.is_active };
+      }
+      cachedPersonaCatalog = lookup;
+      console.log(`[FairPrice Brain] Cached ${Object.keys(cachedPersonaCatalog).length} persona catalog entries`);
+    }
+
+    if (!proxyLocRes.error) {
+      cachedProxyLocations = (proxyLocRes.data ?? []).map((r: { zip_code: string; metro_area: string; income_tier: string; is_active: boolean }) => ({
+        zip_code: r.zip_code,
+        metro_area: r.metro_area,
+        income_tier: r.income_tier,
+        is_active: r.is_active,
+      }));
+      console.log(`[FairPrice Brain] Cached ${cachedProxyLocations.length} proxy location entries`);
     }
   } catch (err) {
     console.warn('[FairPrice Brain] refreshDataCaches error:', err instanceof Error ? err.message : String(err));
@@ -140,6 +211,8 @@ function mergeRequiredCountermeasures(detected_tactics: string[]): Record<string
     strict_tracking_protection: false,
     canvas_spoofing_active: false,
     url_sanitize: false,
+    ua_spoofing_active: false,
+    proxy_routing_active: false,
   };
   for (const tactic of detected_tactics) {
     const entry = cachedTacticRegistry[tactic];
@@ -173,24 +246,73 @@ function selectProfileByTier(tier: number): StrategyProfileRow | null {
   return cachedProfiles.find((p) => p.tier === tier) ?? cachedProfiles[0] ?? null;
 }
 
+function resolveUserAgentOverride(personaProfile: string | undefined): string | null {
+  if (!personaProfile || !personaProfile.trim()) return null;
+  const persona = cachedPersonaCatalog[personaProfile.trim()];
+  if (!persona?.is_active || !persona.user_agent) return null;
+  return persona.user_agent;
+}
+
 function buildResponse(
   row: StrategyProfileRow | null,
   policy: string,
   reason: string,
   bucket: number,
   selectionMode: 'exploit' | 'explore',
+  sessionId: string,
 ): StrategyResponse {
   if (row === null) {
     return {
       ...FALLBACK_AMNESIA_STANDARD,
       engineSelectionPolicy: policy,
       engineSelectionReason: reason,
-      engineSelectionKeyScope: 'domain+anonymous_bucket',
+      engineSelectionKeyScope: 'domain+session',
       engineSelectionBucket: bucket,
       selection_mode: selectionMode,
     };
   }
+  
   const def = row.definition ?? {};
+  const uaSpoofingActive = def.ua_spoofing_active ?? false;
+  const personaProfile = def.persona_profile ?? null;
+  const userAgentOverride = uaSpoofingActive && personaProfile
+    ? resolveUserAgentOverride(personaProfile)
+    : null;
+
+  const proxyRoutingActive = def.proxy_routing_active ?? false;
+  
+  // FIXED ZIP ROTATION LOGIC: Replaced hardcoded 'low' fallback with null check
+  const targetTier = def.target_income_tier ?? null;
+  let proxyConfig: { host: string; port: number; username: string; password: string; zip_code: string } | null = null;
+
+  if (proxyRoutingActive && cachedProxyLocations.length > 0) {
+    // If a tier is specified, filter for it. If not, use the whole catalog.
+    const availableZips = targetTier 
+      ? cachedProxyLocations.filter((loc) => loc.income_tier === targetTier)
+      : cachedProxyLocations;
+      
+    // Fallback to full pool if the filtered pool is empty somehow
+    const pool = availableZips.length > 0 ? availableZips : cachedProxyLocations;
+    
+    // Rotate deterministically based on bucket math
+    const selectedZip = pool[bucket % pool.length].zip_code;
+
+    const proxyHost = process.env.PROXY_HOST || 'pr.oxylabs.io';
+    const proxyPort = parseInt(process.env.PROXY_PORT || '7777', 10);
+    const baseUser = process.env.PROXY_USER || 'customer-fairprice';
+    const proxyPass = process.env.PROXY_PASS || 'placeholder_pass';
+    const cleanSessionId = sessionId.replace(/-/g, '');
+    const magicUsername = `${baseUser}-cc-us-zip-${selectedZip}-sess-${cleanSessionId}`;
+
+    proxyConfig = {
+      host: proxyHost,
+      port: proxyPort,
+      username: magicUsername,
+      password: proxyPass,
+      zip_code: selectedZip,
+    };
+  }
+
   return {
     strategy_id: row.id,
     strategy_code: row.code,
@@ -198,6 +320,9 @@ function buildResponse(
     strict_tracking_protection: def.strict_tracking_protection ?? false,
     canvas_spoofing_active: def.canvas_spoofing_active ?? false,
     url_sanitize: def.url_sanitize ?? false,
+    ua_spoofing_active: uaSpoofingActive,
+    user_agent_override: userAgentOverride,
+    persona_profile: userAgentOverride != null ? personaProfile : null,
     strategyName: row.name,
     strategyEngineName: 'railway_brain_v2.0',
     strategyVersion: '2.0',
@@ -205,26 +330,39 @@ function buildResponse(
     strategy_profile: row.code,
     engineSelectionPolicy: policy,
     engineSelectionReason: reason,
-    engineSelectionKeyScope: 'domain+anonymous_bucket',
+    engineSelectionKeyScope: 'domain+session',
     engineSelectionBucket: bucket,
     selection_mode: selectionMode,
-    proxyConfig: null,
+    proxy_config: proxyConfig,
   };
 }
 
 /** Fully synchronous - zero DB calls on critical path */
 app.post('/api/v1/strategy', (req: Request, res: Response) => {
+  console.log(`\n================= [ 🚀 NEW PRICE CHECK ] =================`);
   const body = req.body as StrategyRequest;
-  const domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
+
+  // 1. LOG INPUTS
+  console.log(`[📦 INPUT] Domain: ${body?.domain} | Session: ${body?.session_id}`);
+  console.log(`[📦 INPUT] Tactics Detected:`, body?.detected_tactics && body.detected_tactics.length > 0 ? body.detected_tactics : 'None');
+
+  let domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
+  
+  // --- DOMAIN NORMALIZER ---
+  if (domain === 'a.co' || domain === 'amzn.to') domain = 'amazon.com';
+  if (domain === 'walm.rt') domain = 'walmart.com';
   const detected_tactics = Array.isArray(body?.detected_tactics)
     ? body.detected_tactics.map((t) => String(t))
     : [];
-  const anonymous_bucket = typeof body?.anonymous_bucket === 'number'
-    ? Math.floor(Math.max(0, Math.min(99, body.anonymous_bucket)))
-    : 0;
+  const sessionId = typeof body?.session_id === 'string' && body.session_id.trim() ? body.session_id.trim() : 'default';
+  
+  const anonymous_bucket = computeBucket(domain, sessionId);
+
+  // 2. LOG MATH
+  console.log(`[🧠 MATH] Calculated Bucket: ${anonymous_bucket} (Determines Explore vs Exploit)`);
 
   let policy = 'railway_tiered_v1_epsilon_greedy_exploit';
-  let reason = `bucket=${anonymous_bucket} domain=${domain}`;
+  let reason = `bucket=${anonymous_bucket} domain=${domain} session=${sessionId}`;
   let selectionMode: 'exploit' | 'explore' = 'exploit';
   let row: StrategyProfileRow | null = null;
 
@@ -232,28 +370,49 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
     row = null;
     policy = 'railway_tiered_v1_cold_boot_fallback';
     reason += ' cache_empty=amnesia_standard';
+    console.log(`[⚠️ WARNING] Cache is empty! Falling back to Amnesia Standard.`);
   } else {
     const isExplore = anonymous_bucket >= 75;
+    
+    // 3. LOG DECISIONS
     if (isExplore) {
       selectionMode = 'explore';
       policy = 'railway_tiered_v1_epsilon_greedy_explore';
       const randomTier = anonymous_bucket % 4;
       row = selectProfileByTier(randomTier);
       reason += ` explore_tier=${randomTier}`;
+      console.log(`[🎲 DECISION] Mode: EXPLORE | Randomly selected Tier: ${randomTier}`);
     } else {
       selectionMode = 'exploit';
       const required = mergeRequiredCountermeasures(detected_tactics);
+      console.log(`[⚖️ DECISION] Mode: EXPLOIT | Calculated Countermeasures:`, JSON.stringify(required));
+      
       row = selectLowestQualifyingProfile(required);
       if (row) {
         reason += ` tactics=[${detected_tactics.join(',')}] tier=${row.tier}`;
+        console.log(`[🎯 DECISION] Lowest qualifying profile found: Tier ${row.tier} (${row.code})`);
       } else {
         row = selectProfileByTier(0);
         reason += ` no_qualify fallback_tier_0`;
+        console.log(`[⚠️ DECISION] No qualifying profile found! Falling back to Tier 0.`);
       }
     }
   }
 
-  const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode);
+  const response = buildResponse(row, policy, reason, anonymous_bucket, selectionMode, sessionId);
+  
+  // 4. LOG OUTPUTS
+  console.log(`[✅ OUTPUT] Final Strategy Deployed: ${response.strategy_code}`);
+  
+  if (response.proxy_config) {
+    console.log(`[🌐 PROXY] Routing is ACTIVE`);
+    console.log(`[🌐 PROXY] Target ZIP: ${response.proxy_config.zip_code}`);
+    console.log(`[🌐 PROXY] Exact Username String: "${response.proxy_config.username}"`);
+  } else {
+    console.log(`[🛡️ PROXY] Routing is INACTIVE (Using Clear-Net)`);
+  }
+  
+  console.log(`==========================================================\n`);
   res.status(200).json(response);
 });
 

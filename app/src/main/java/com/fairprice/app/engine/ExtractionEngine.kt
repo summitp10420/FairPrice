@@ -19,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.StorageController
 import org.mozilla.geckoview.WebExtension
@@ -41,6 +42,9 @@ data class ExtractionRequest(
     val cleanSessionRequired: Boolean = false,
     val phase: String = "default",
     val strictTrackingProtection: Boolean = false,
+    val userAgentOverride: String? = null,
+    /** Phase 3b will use this for CONFIGURE_PROXY; plumbing only in Phase 3a. */
+    val proxyConfig: ProxyConfig? = null,
 )
 
 class CleanSessionPreparationException(message: String, cause: Throwable? = null) :
@@ -48,7 +52,11 @@ class CleanSessionPreparationException(message: String, cause: Throwable? = null
 
 class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private val tag = "GeckoExtractionEngine"
-    private val runtime: GeckoRuntime = GeckoRuntime.getDefault(context)
+    private val appContext: Context = context.applicationContext
+    private val defaultRuntime: GeckoRuntime = GeckoRuntime.getDefault(appContext)
+    @Volatile
+    private var proxyRuntime: GeckoRuntime? = null
+    private val proxyRuntimeLock = Any()
     private val _currentSession = MutableStateFlow<GeckoSession?>(null)
     override val currentSession: StateFlow<GeckoSession?> = _currentSession.asStateFlow()
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -56,7 +64,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private var pendingExtraction: PendingExtraction? = null
 
     init {
-        runtime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
+        defaultRuntime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
             { extension ->
                 if (extension == null) {
                     Log.e(tag, "Built-in extractor extension resolved as null during warmup.")
@@ -73,14 +81,24 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     override suspend fun loadAndExtract(url: String, request: ExtractionRequest): Result<ExtractionResult> = runCatching {
         Log.i(
             tag,
-            "Starting loadAndExtract for URL: $url (phase=${request.phase}, cleanRequired=${request.cleanSessionRequired})",
+            "Starting loadAndExtract for URL: $url (phase=${request.phase}, cleanRequired=${request.cleanSessionRequired}, proxy=${request.proxyConfig != null})",
         )
-        val extension = awaitBuiltInExtension()
-        val sessionSwap = createFreshSession(request)
+        val useProxy = request.proxyConfig != null
+        val runtime = if (useProxy) {
+            getOrCreateProxyRuntime(requireNotNull(request.proxyConfig))
+        } else {
+            defaultRuntime
+        }
+        val extension = awaitBuiltInExtension(runtime)
+        val sessionSwap = createFreshSession(request, runtime)
         val session = sessionSwap.newSession
+        retireOldSession(sessionSwap.oldSession)
+        if (useProxy && request.proxyConfig != null) {
+            session.promptDelegate = createProxyAuthPromptDelegate(request.proxyConfig)
+        }
         attachDelegate(extension, session)
         if (request.cleanSessionRequired) {
-            wipeStorageForCleanSession(request)
+            wipeStorageForCleanSession(request, runtime)
         }
 
         withTimeout(EXTRACTION_TIMEOUT_MS) {
@@ -97,9 +115,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                         tag,
                         "Session load started for URL: $url (session=${session.hashCode()})",
                     )
-                    retireOldSession(sessionSwap.oldSession)
                 } catch (throwable: Throwable) {
-                    retireOldSession(sessionSwap.oldSession)
                     clearPendingExtraction(continuation)
                     if (continuation.isActive) {
                         continuation.cancel(
@@ -120,7 +136,45 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private suspend fun awaitBuiltInExtension(): WebExtension {
+    private fun getOrCreateProxyRuntime(proxyConfig: ProxyConfig): GeckoRuntime {
+        val existing = proxyRuntime
+        if (existing != null) return existing
+        synchronized(proxyRuntimeLock) {
+            var r = proxyRuntime
+            if (r != null) return r
+            val socksArg = "socks://${proxyConfig.host}:${proxyConfig.port}"
+            val settings = GeckoRuntimeSettings.Builder()
+                .arguments(arrayOf(socksArg))
+                .build()
+            r = GeckoRuntime.create(appContext, settings)
+            r.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
+                { ext -> if (ext != null) Log.i(tag, "Proxy runtime: built-in extension ready.") else Log.e(tag, "Proxy runtime: extension null.") },
+                { t -> Log.e(tag, "Proxy runtime: extension failed.", t) },
+            )
+            proxyRuntime = r
+            Log.i(tag, "Proxy runtime created with SOCKS $socksArg")
+            return r
+        }
+    }
+
+    private fun createProxyAuthPromptDelegate(proxyConfig: ProxyConfig): GeckoSession.PromptDelegate {
+        return object : GeckoSession.PromptDelegate {
+            override fun onAuthPrompt(
+                session: GeckoSession,
+                prompt: GeckoSession.PromptDelegate.AuthPrompt,
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                val flags = prompt.authOptions.flags
+                val isProxy = (flags and GeckoSession.PromptDelegate.AuthPrompt.AuthOptions.Flags.PROXY) != 0
+                return if (isProxy) {
+                    GeckoResult.fromValue(prompt.confirm(proxyConfig.username, proxyConfig.password))
+                } else {
+                    GeckoResult.fromValue(prompt.dismiss())
+                }
+            }
+        }
+    }
+
+    private suspend fun awaitBuiltInExtension(runtime: GeckoRuntime): WebExtension {
         return suspendCancellableCoroutine { continuation ->
             runtime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
                 { extension ->
@@ -162,7 +216,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         )
     }
 
-    private suspend fun wipeStorageForCleanSession(request: ExtractionRequest) {
+    private suspend fun wipeStorageForCleanSession(request: ExtractionRequest, runtime: GeckoRuntime) {
         Log.i(tag, "Clean session requested for phase=${request.phase}")
         Log.i(tag, "Clean session storage clear started for phase=${request.phase}")
         try {
@@ -200,10 +254,11 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private fun createFreshSession(request: ExtractionRequest): SessionSwap {
+    private fun createFreshSession(request: ExtractionRequest, runtime: GeckoRuntime): SessionSwap {
         val oldSession = _currentSession.value
         val newSession = GeckoSession().apply { open(runtime) }
         applyTrackingProtection(newSession, request)
+        applyPersonaSpoofing(newSession, request)
         _currentSession.value = newSession
         Log.i(
             tag,
@@ -253,6 +308,17 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             tag,
             "Tracking protection strict requested (phase=${request.phase}, useTPApplied=$useTrackingProtectionApplied, strictLevelApplied=$strictLevelApplied)",
         )
+    }
+
+    private fun applyPersonaSpoofing(session: GeckoSession, request: ExtractionRequest) {
+        val ua = request.userAgentOverride
+        if (ua == null || ua.isBlank()) return
+        runCatching {
+            session.settings.userAgentOverride = ua
+            Log.i(tag, "User-Agent override applied (phase=${request.phase})")
+        }.onFailure { throwable ->
+            Log.w(tag, "Failed to apply User-Agent override (phase=${request.phase})", throwable)
+        }
     }
 
     private fun retireOldSession(oldSession: GeckoSession?) {
