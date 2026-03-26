@@ -346,7 +346,11 @@ app.post('/api/v1/strategy', (req: Request, res: Response) => {
   console.log(`[📦 INPUT] Domain: ${body?.domain} | Session: ${body?.session_id}`);
   console.log(`[📦 INPUT] Tactics Detected:`, body?.detected_tactics && body.detected_tactics.length > 0 ? body.detected_tactics : 'None');
 
-  const domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
+  let domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : 'unknown-domain';
+  
+  // --- DOMAIN NORMALIZER ---
+  if (domain === 'a.co' || domain === 'amzn.to') domain = 'amazon.com';
+  if (domain === 'walm.rt') domain = 'walmart.com';
   const detected_tactics = Array.isArray(body?.detected_tactics)
     ? body.detected_tactics.map((t) => String(t))
     : [];
