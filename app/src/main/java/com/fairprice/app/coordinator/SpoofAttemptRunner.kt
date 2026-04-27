@@ -57,7 +57,7 @@ class SpoofAttemptRunner(
                 extractionResult = extractionEngine.loadAndExtract(
                     navigationUrl,
                     request = ExtractionRequest(
-                        cleanSessionRequired = strategy.amnesiaWipeRequired,
+                        cleanSessionRequired = strategy.amnesiaWipeRequired || strategy.proxyConfig != null,
                         phase = DefaultPriceCheckCoordinator.PHASE_SPOOF,
                         strictTrackingProtection = strategy.strictTrackingProtection,
                         userAgentOverride = strategy.userAgentOverride.takeIf { strategy.uaSpoofingActive },

@@ -16,10 +16,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.StorageController
 import org.mozilla.geckoview.WebExtension
@@ -54,9 +54,10 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private val tag = "GeckoExtractionEngine"
     private val appContext: Context = context.applicationContext
     private val defaultRuntime: GeckoRuntime = GeckoRuntime.getDefault(appContext)
+    private val proxyRouteState = AtomicReference<ProxyRoute>(ProxyRoute.Direct)
+    private val proxyDelegateInstallLock = Any()
     @Volatile
-    private var proxyRuntime: GeckoRuntime? = null
-    private val proxyRuntimeLock = Any()
+    private var proxyRouteDelegateInstalled = false
     private val _currentSession = MutableStateFlow<GeckoSession?>(null)
     override val currentSession: StateFlow<GeckoSession?> = _currentSession.asStateFlow()
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -84,15 +85,8 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             "Starting loadAndExtract for URL: $url (phase=${request.phase}, cleanRequired=${request.cleanSessionRequired}, proxy=${request.proxyConfig != null})",
         )
         val useProxy = request.proxyConfig != null
-        val runtime = if (useProxy) {
-            getOrCreateProxyRuntime(requireNotNull(request.proxyConfig))
-        } else {
-            defaultRuntime
-        }
-        val extension = awaitBuiltInExtension(
-            runtime,
-            proxyConfig = if (useProxy) request.proxyConfig else null,
-        )
+        val runtime = defaultRuntime
+        val extension = awaitBuiltInExtension(runtime)
         val sessionSwap = createFreshSession(request, runtime)
         val session = sessionSwap.newSession
         retireOldSession(sessionSwap.oldSession)
@@ -104,29 +98,38 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
             wipeStorageForCleanSession(request, runtime)
         }
 
-        withTimeout(EXTRACTION_TIMEOUT_MS) {
-            suspendCancellableCoroutine { continuation ->
-                setPendingExtraction(session, continuation)
-                continuation.invokeOnCancellation {
-                    clearPendingExtraction(continuation)
-                    Log.w(tag, "Extraction continuation cancelled for URL: $url")
-                }
+        try {
+            if (request.proxyConfig != null) {
+                val cfg = request.proxyConfig
+                proxyRouteState.set(ProxyRoute.Socks(host = cfg.host, port = cfg.port))
+                Log.i(tag, "Proxy route armed (host=${cfg.host} port=${cfg.port})")
+            }
+            withTimeout(EXTRACTION_TIMEOUT_MS) {
+                suspendCancellableCoroutine { continuation ->
+                    setPendingExtraction(session, continuation)
+                    continuation.invokeOnCancellation {
+                        clearPendingExtraction(continuation)
+                        Log.w(tag, "Extraction continuation cancelled for URL: $url")
+                    }
 
-                try {
-                    session.load(GeckoSession.Loader().uri(url))
-                    Log.i(
-                        tag,
-                        "Session load started for URL: $url (session=${session.hashCode()})",
-                    )
-                } catch (throwable: Throwable) {
-                    clearPendingExtraction(continuation)
-                    if (continuation.isActive) {
-                        continuation.cancel(
-                            CancellationException("Failed to load extraction URL: $url", throwable),
+                    try {
+                        session.load(GeckoSession.Loader().uri(url))
+                        Log.i(
+                            tag,
+                            "Session load started for URL: $url (session=${session.hashCode()})",
                         )
+                    } catch (throwable: Throwable) {
+                        clearPendingExtraction(continuation)
+                        if (continuation.isActive) {
+                            continuation.cancel(
+                                CancellationException("Failed to load extraction URL: $url", throwable),
+                            )
+                        }
                     }
                 }
             }
+        } finally {
+            proxyRouteState.set(ProxyRoute.Direct)
         }
     }.onFailure { throwable ->
         when (throwable) {
@@ -139,41 +142,48 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    /**
-     * Separate runtime for proxy runs: no Chromium SOCKS CLI args (incompatible with GeckoView).
-     * SOCKS routing is applied in [background.js] via [browser.proxy.onRequest] after native
-     * confirms [CHECK_PROXY_RUNTIME] on [PROXY_NATIVE_CHANNEL].
-     */
-    private fun getOrCreateProxyRuntime(proxyConfig: ProxyConfig): GeckoRuntime {
-        val existing = proxyRuntime
-        if (existing != null) return existing
-        synchronized(proxyRuntimeLock) {
-            var r = proxyRuntime
-            if (r != null) return r
-            val settings = GeckoRuntimeSettings.Builder().build()
-            r = GeckoRuntime.create(appContext, settings)
-            proxyRuntime = r
-            Log.i(tag, "Proxy runtime created (WebExtension SOCKS5 routing; host=${proxyConfig.host} port=${proxyConfig.port})")
-            return r
+    /** Current SOCKS route for [background.js] GET_ROUTE; only non-[Direct] during an armed proxy extraction. */
+    private sealed class ProxyRoute {
+        data object Direct : ProxyRoute()
+        data class Socks(val host: String, val port: Int) : ProxyRoute()
+    }
+
+    private val proxyRouteMessageDelegate = object : WebExtension.MessageDelegate {
+        override fun onMessage(
+            nativeApp: String,
+            message: Any,
+            sender: WebExtension.MessageSender,
+        ): GeckoResult<Any>? {
+            if (nativeApp != PROXY_NATIVE_CHANNEL) return null
+            val type = when (message) {
+                is JSONObject -> message.optString("type", "")
+                is Map<*, *> -> (message["type"] as? String).orEmpty()
+                else -> ""
+            }
+            if (type != "GET_ROUTE") return null
+            return when (val route = proxyRouteState.get()) {
+                is ProxyRoute.Socks -> {
+                    GeckoResult.fromValue(
+                        JSONObject().apply {
+                            put("enabled", true)
+                            put("host", route.host)
+                            put("port", route.port)
+                        },
+                    )
+                }
+                is ProxyRoute.Direct -> {
+                    GeckoResult.fromValue(JSONObject().apply { put("enabled", false) })
+                }
+            }
         }
     }
 
-    private fun createProxyChannelMessageDelegate(proxyConfig: ProxyConfig): WebExtension.MessageDelegate {
-        return object : WebExtension.MessageDelegate {
-            override fun onMessage(
-                nativeApp: String,
-                message: Any,
-                sender: WebExtension.MessageSender,
-            ): GeckoResult<Any>? {
-                if (nativeApp != PROXY_NATIVE_CHANNEL) return null
-                val response = JSONObject().apply {
-                    put("isProxyRuntime", true)
-                    put("host", proxyConfig.host)
-                    put("port", proxyConfig.port)
-                }
-                Log.i(tag, "Proxy CHECK_PROXY_RUNTIME answered for channel=$nativeApp")
-                return GeckoResult.fromValue(response)
-            }
+    private fun installProxyRouteDelegateOnce(extension: WebExtension) {
+        synchronized(proxyDelegateInstallLock) {
+            if (proxyRouteDelegateInstalled) return
+            extension.setMessageDelegate(proxyRouteMessageDelegate, PROXY_NATIVE_CHANNEL)
+            proxyRouteDelegateInstalled = true
+            Log.i(tag, "Proxy GET_ROUTE native channel delegate installed ($PROXY_NATIVE_CHANNEL)")
         }
     }
 
@@ -194,10 +204,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
         }
     }
 
-    private suspend fun awaitBuiltInExtension(
-        runtime: GeckoRuntime,
-        proxyConfig: ProxyConfig?,
-    ): WebExtension {
+    private suspend fun awaitBuiltInExtension(runtime: GeckoRuntime): WebExtension {
         return suspendCancellableCoroutine { continuation ->
             runtime.webExtensionController.ensureBuiltIn(EXTENSION_RESOURCE_PATH, EXTENSION_ID).accept(
                 { extension ->
@@ -209,13 +216,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
                         }
                         return@accept
                     }
-                    if (proxyConfig != null) {
-                        resolvedExtension.setMessageDelegate(
-                            createProxyChannelMessageDelegate(proxyConfig),
-                            PROXY_NATIVE_CHANNEL,
-                        )
-                        Log.i(tag, "Proxy native channel delegate registered for background.js")
-                    }
+                    installProxyRouteDelegateOnce(resolvedExtension)
                     Log.i(tag, "Built-in extractor extension ready.")
                     continuation.resume(resolvedExtension)
                 },
@@ -510,7 +511,7 @@ class GeckoExtractionEngine(context: Context) : ExtractionEngine {
     private companion object {
         private const val EXTENSION_ID = "extractor@fairprice.com"
         private const val NATIVE_APP_CHANNEL = "com.fairprice.extractor"
-        /** Native channel for [background.js] proxy runtime check (must match manifest/nativeMessaging). */
+        /** Native channel for [background.js] GET_ROUTE (must match manifest/nativeMessaging). */
         private const val PROXY_NATIVE_CHANNEL = "com.fairprice.extractor.proxy"
         private const val EXTENSION_RESOURCE_PATH = "resource://android/assets/extension/"
         private const val PRICE_EXTRACT_TYPE = "PRICE_EXTRACT"
